@@ -52,7 +52,7 @@
 
 <video id="cam" autoplay playsinline muted style="display:none"></video>
 <div id="tapZone"></div>
-<div style="position:fixed;right:6px;bottom:4px;color:#8892c8;font:11px monospace;opacity:.6;z-index:5">v8</div>
+<div style="position:fixed;right:6px;bottom:4px;color:#8892c8;font:11px monospace;opacity:.6;z-index:5">v9</div>
 <div id="startScreen"><h1>화면을 터치해서 시작</h1><p>카메라와 마이크 권한을 허용해 주세요</p></div>
 <div id="debug" class="hidden">
   <canvas id="dbgCanvas" width="96" height="54"></canvas>
@@ -501,7 +501,7 @@
   // 판정 기준은 전부 "주변 소음 대비 몇 dB 큰가"로 잡아서 장소가 바뀌어도 자동으로 맞춰짐
   let SENS = 0;                 // 전체 민감도 보정 (dB). [ ] 키 또는 패널 버튼
   // 기준 프리셋: 기기 마이크는 자동 음량 조절 때문에 조용함~외침 차이가 작아서 값이 낮음
-  const PRESETS = { device: { talk: 6, shout: 14, scream: 22 }, mac: { talk: 14, shout: 34, scream: 44 } };
+  const PRESETS = { device: { talk: 6, shout: 11, scream: 20 }, mac: { talk: 14, shout: 34, scream: 44 } };
   let PRESET = 'device';
   let TALK_DB = PRESETS[PRESET].talk, SHOUT_DB = PRESETS[PRESET].shout, SCREAM_DB = PRESETS[PRESET].scream;
   function setPreset(name) {
@@ -568,7 +568,7 @@
 
         const db = Math.max(0, 20 * Math.log10(rms / floor)) - SENS;
         sound.level = rms; sound.db = db;
-        $('vS').textContent = db.toFixed(0) + 'dB';
+        $('vS').textContent = db.toFixed(0) + 'dB' + (now < muteUntil ? ' (자기소리 무시 중)' : '');
         $('bS').style.width = Math.min(100, db / 50 * 100) + '%';
 
         if (db < TALK_DB) lastQuietAt = now;
@@ -582,7 +582,7 @@
           above = false;
           const len = now - burstStart;
           const wasQuiet = (burstStart - lastQuietAtBeforeBurst) <= 40;
-          if (burstPeakDb > SCREAM_DB && len > 150) {
+          if (burstPeakDb > SCREAM_DB && len > 450) {
             fireSound('scream', burstPeakDb); lastBurstLen = 0;
           } else if (len <= CLAP_MAX_MS && wasQuiet) {
             const gap = burstStart - lastBurstEnd;
@@ -640,7 +640,7 @@
 
   // 음성인식 모드: 'auto' = 말소리가 감지될 때만 잠깐 켬 (A), 'off' = 안 씀 (B)
   let SR_MODE = 'auto';
-  let rec = null, recActive = false, recStopTimer = null;
+  let rec = null, recActive = false, recStopTimer = null, recEndedAt = -9999;
   const SR_LISTEN_MS = 5000;     // 한 번 켜면 이만큼 듣고 끔
 
   function startSpeech() {
@@ -651,7 +651,7 @@
     rec.continuous = true;
     rec.interimResults = true;
     rec.maxAlternatives = 3;
-    rec.onstart = () => { speech.ok = true; recActive = true; $('srStatus').textContent = '듣는 중'; muteSound(700); };
+    rec.onstart = () => { speech.ok = true; recActive = true; $('srStatus').textContent = '듣는 중'; muteSound(1200); };
     rec.onresult = (ev) => {
       let text = '', all = '';
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
@@ -668,7 +668,7 @@
       if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed' || ev.error === 'network') speech.ok = false;
       $('srStatus').textContent = '오류: ' + ev.error;
     };
-    rec.onend = () => { recActive = false; if (SR_MODE === 'auto') $('srStatus').textContent = '대기 (소리 나면 켬)'; };
+    rec.onend = () => { recActive = false; recEndedAt = performance.now(); muteSound(1500); if (SR_MODE === 'auto') $('srStatus').textContent = '대기 (소리 나면 켬)'; };
     speech.ok = true;
     $('srStatus').textContent = '대기 (소리 나면 켬)';
     updateSrButton();
@@ -676,9 +676,10 @@
   // 말소리가 감지되면 호출: 켜져 있지 않으면 켜고, 일정 시간 뒤 끔
   function listenBurst() {
     if (!rec || SR_MODE !== 'auto') return;
-    if (!recActive) { try { rec.start(); } catch (e) {} }
+    if (!recActive && performance.now() - recEndedAt < 2500) return;   // 종료음 직후엔 다시 켜지 않음
+    if (!recActive) { muteSound(1200); try { rec.start(); } catch (e) {} }
     clearTimeout(recStopTimer);
-    recStopTimer = setTimeout(() => { try { rec.stop(); } catch (e) {} }, SR_LISTEN_MS);
+    recStopTimer = setTimeout(() => { muteSound(1500); try { rec.stop(); } catch (e) {} }, SR_LISTEN_MS);
   }
   function setSrMode(mode) {
     SR_MODE = mode;
@@ -691,7 +692,8 @@
   // ===== 5단계: 효과음 (코드 합성) =====
   const SFX = (() => {
     let ac = null;
-    function ctx() { if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)(); if (ac.state === 'suspended') ac.resume(); return ac; }
+    let master = null;
+    function ctx() { if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = 0.55; master.connect(ac.destination); } if (ac.state === 'suspended') ac.resume(); return ac; }
     function tone(freq, dur, { type = 'sine', gain = 0.25, slideTo = null, vib = 0, delay = 0 } = {}) {
       const c = ctx(); const t0 = c.currentTime + delay;
       const o = c.createOscillator(), g = c.createGain();
@@ -700,7 +702,7 @@
       if (vib) { const l = c.createOscillator(), lg = c.createGain(); l.frequency.value = 5.5; lg.gain.value = vib; l.connect(lg); lg.connect(o.frequency); l.start(t0); l.stop(t0 + dur); }
       g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(gain, t0 + 0.05);
       g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-      o.connect(g); g.connect(c.destination); o.start(t0); o.stop(t0 + dur + 0.05);
+      o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + dur + 0.05);
     }
     function noise(dur, { gain = 0.2, delay = 0, lp = 1200 } = {}) {
       const c = ctx(); const t0 = c.currentTime + delay;
@@ -709,7 +711,7 @@
       const src = c.createBufferSource(); src.buffer = b;
       const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lp;
       const g = c.createGain(); g.gain.setValueAtTime(gain, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-      src.connect(f); f.connect(g); g.connect(c.destination); src.start(t0);
+      src.connect(f); f.connect(g); g.connect(master); src.start(t0);
     }
     return {
       unlock() { ctx(); },
@@ -743,7 +745,7 @@
   })();
   // 효과음이 나는 동안은 마이크 판정을 멈춤 (스피커 소리를 외침으로 오인 방지)
   const SFX_LEN = { eerie: 1900, eerie2: 2200, eerie3: 2200, hello: 900, hello2: 900, giggle: 800, who: 500, who2: 700, hmm: 800, nod: 600, nod2: 700, tada: 1200, boing: 500, whoosh: 700, spin: 800, shy: 800, love: 1700, sparkle: 500, shock: 600, clap: 600, hum: 2500, no: 600, scream: 1200, poof: 600, yawn: 1500, pop: 400 };
-  Object.keys(SFX).forEach(k => { if (k === 'unlock') return; const f = SFX[k]; SFX[k] = () => { muteSound((SFX_LEN[k] || 800) + 300); f(); }; });
+  Object.keys(SFX).forEach(k => { if (k === 'unlock') return; const f = SFX[k]; SFX[k] = () => { muteSound((SFX_LEN[k] || 800) + 900); f(); }; });
   // 브라우저 정책상 첫 클릭/키 입력 뒤에 소리가 나므로, 처음 아무 키나 누르면 열림
   window.addEventListener('keydown', () => SFX.unlock(), { once: true });
   window.addEventListener('pointerdown', () => SFX.unlock(), { once: true });
