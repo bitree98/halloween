@@ -52,7 +52,7 @@
 
 <video id="cam" autoplay playsinline muted style="display:none"></video>
 <div id="tapZone"></div>
-<div style="position:fixed;right:6px;bottom:4px;color:#8892c8;font:11px monospace;opacity:.6;z-index:5">v13</div>
+<div style="position:fixed;right:6px;bottom:4px;color:#8892c8;font:11px monospace;opacity:.6;z-index:5">v14</div>
 <div id="startScreen"><h1>화면을 터치해서 시작</h1><p>카메라 권한을 허용해 주세요</p></div>
 <div id="debug" class="hidden">
   <canvas id="dbgCanvas" width="96" height="54"></canvas>
@@ -362,8 +362,8 @@
   // 시선: 눈 전체가 조금 움직임 (2단계에서 카메라가 lookTarget 을 바꿈)
   const lookTarget = { x: 0, y: 0 };
   const lookNow = { x: 0, y: 0 };
-  const EYE_RANGE_X = 22;  // 유령 좌표계(scale 전) 기준
-  const EYE_RANGE_Y = 14;
+  const EYE_RANGE_X = 30;  // 유령 좌표계(scale 전) 기준
+  const EYE_RANGE_Y = 16;
   const MOUTH_RANGE_X = 12;
   const MOUTH_RANGE_Y = 8;
   const eyeL = document.getElementById('eyeL');
@@ -371,7 +371,7 @@
   const mouth = document.getElementById('mouth');
   const followEl = document.getElementById('follow');
   const followNow = { x: 0, y: 0 };
-  const FOLLOW_X = 170, FOLLOW_Y = 40;
+  const FOLLOW_X = 300, FOLLOW_Y = 50;
   window.followOn = true;
   const stage = document.getElementById('stage');
 
@@ -383,6 +383,26 @@
     lookTarget.y = Math.max(-1, Math.min(1, ((e.clientY - rect.top) / rect.height) * 2 - 1));
     mouseUntil = performance.now() + 2000;
   });
+
+  function tick() {
+    // 목표가 빨리 움직이면 빨리, 천천히 움직이면 천천히 따라감
+    const gap = Math.abs(lookTarget.x - lookNow.x);
+    const k = Math.min(0.35, 0.08 + gap * 0.6);
+    lookNow.x += (lookTarget.x - lookNow.x) * k;
+    lookNow.y += (lookTarget.y - lookNow.y) * k;
+    const dx = lookNow.x * EYE_RANGE_X, dy = lookNow.y * EYE_RANGE_Y;
+    const F = window.face;
+    eyeL.setAttribute('transform', `translate(${(166 + dx).toFixed(2)} ${(212 + dy).toFixed(2)}) scale(${F.eyeSx} ${F.eyeSy})`);
+    eyeR.setAttribute('transform', `translate(${(234 + dx).toFixed(2)} ${(212 + dy).toFixed(2)}) scale(${F.eyeSx} ${F.eyeSy})`);
+    mouth.setAttribute('transform', `translate(${(lookNow.x * MOUTH_RANGE_X).toFixed(2)} ${(lookNow.y * MOUTH_RANGE_Y).toFixed(2)})`);
+    // 몸 전체가 사람 쪽으로 미끄러지듯 따라가고 고개가 그쪽으로 돌아감 (반응 중엔 멈춤)
+    const fk = window.followOn ? Math.min(0.2, 0.05 + gap * 0.4) : 0.05;
+    followNow.x += ((window.followOn ? lookNow.x * FOLLOW_X : 0) - followNow.x) * fk;
+    followNow.y += ((window.followOn ? lookNow.y * FOLLOW_Y : 0) - followNow.y) * fk;
+    followEl.setAttribute('transform', `translate(${followNow.x.toFixed(1)} ${followNow.y.toFixed(1)}) rotate(${(followNow.x / FOLLOW_X * 10).toFixed(2)} 960 760)`);
+    requestAnimationFrame(tick);
+  }
+  tick();
 
   // ===== 2단계: 카메라 움직임 감지 =====
   // 결과는 window.motion 에 계속 갱신됨 (3단계 이후 반응 판정에 사용)
@@ -1112,7 +1132,8 @@
 
     // 지나감: 좌/우 구역만 움직이고 중앙은 조용
     const side = m.left > ZONE_ON && m.center < CENTER_ON ? 'L' : (m.right > ZONE_ON && m.center < CENTER_ON ? 'R' : null);
-    if (side) { if (sideWhich !== side) { sideWhich = side; sideSince = now; } else if (now - sideSince > 300) { react('pass', side); sideSince = now + 99999; } }
+    // 지나가는 동안은 반응 없이 쫓기만 함. 한쪽에 1.5초 넘게 머물면 그때 지나감 반응
+    if (side) { if (sideWhich !== side) { sideWhich = side; sideSince = now; } else if (now - sideSince > 1500) { react('pass', side); sideSince = now + 99999; } }
     else sideWhich = null;
 
     // 멈춰 섬: 중앙에 2초 이상 움직임 유지
