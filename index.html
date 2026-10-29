@@ -69,7 +69,7 @@
   <div>키워드: <span id="srHit">-</span></div>
   <div>흔들기 왕복: <span id="vWave">0</span></div>
   <div>반응: <span id="vRe">-</span></div>
-  <div class="row"><button id="btnSensDown">소리 민감도 -</button><button id="btnSensUp">+</button><button id="btnMirror">좌우반전</button><button id="btnHide">패널 숨김</button></div>
+  <div class="row"><button id="btnSensDown">소리 민감도 -</button><button id="btnSensUp">+</button><button id="btnMirror">좌우반전</button><button id="btnSr">음성인식: 켬(A)</button><button id="btnHide">패널 숨김</button></div>
   <div class="row" id="btnReacts"></div>
   <div style="opacity:.7">키보드: d 패널 / m 반전 / [ ] 민감도</div>
 </div>
@@ -491,6 +491,8 @@
   //   sound.db    : 주변 소음 대비 현재 크기 (dB). 0 = 조용할 때와 같음
   //   sound.event : 마지막 판정 ('clap' 박수 두 번 / 'shout' 외침 / 'talk' 말하기 / 'scream' 아주 큰 소리)
   const sound = { level: 0, db: 0, event: null, eventAt: 0, ok: false };
+  let muteUntil = 0;                         // 이 시각까지는 소리 판정 안 함 (자기 효과음·음성인식 시작음 무시)
+  function muteSound(ms) { muteUntil = Math.max(muteUntil, performance.now() + ms); }
   window.sound = sound;
   const soundListeners = [];
   window.onSound = fn => soundListeners.push(fn);
@@ -509,6 +511,7 @@
 
   function fireSound(type, db) {
     const now = performance.now();
+    if ((type === 'talk' || type === 'shout') && typeof listenBurst === 'function') listenBurst();
     if (sound.event === type && now - sound.eventAt < EVENT_COOLDOWN) return;
     sound.event = type; sound.eventAt = now;
     $('vEv').textContent = type + ' (' + db.toFixed(0) + 'dB)';
@@ -558,6 +561,7 @@
         $('bS').style.width = Math.min(100, db / 50 * 100) + '%';
 
         if (db < TALK_DB) lastQuietAt = now;
+        if (now < muteUntil) { above = false; talking = false; lastQuietAt = now; requestAnimationFrame(loop); return; }
 
         // 큰 소리 묶음(burst)
         if (db > SHOUT_DB) {
@@ -623,17 +627,20 @@
     speechListeners.forEach(fn => fn(kind, hit));
   }
 
+  // 음성인식 모드: 'auto' = 말소리가 감지될 때만 잠깐 켬 (A), 'off' = 안 씀 (B)
+  let SR_MODE = 'auto';
+  let rec = null, recActive = false, recStopTimer = null;
+  const SR_LISTEN_MS = 5000;     // 한 번 켜면 이만큼 듣고 끔
+
   function startSpeech() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { $('srStatus').textContent = '이 브라우저는 미지원'; return; }
-    const rec = new SR();
+    rec = new SR();
     rec.lang = 'ko-KR';
     rec.continuous = true;
     rec.interimResults = true;
     rec.maxAlternatives = 3;
-    let restartTimer = null;
-
-    rec.onstart = () => { speech.ok = true; $('srStatus').textContent = '듣는 중'; };
+    rec.onstart = () => { speech.ok = true; recActive = true; $('srStatus').textContent = '듣는 중'; muteSound(700); };
     rec.onresult = (ev) => {
       let text = '', all = '';
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
@@ -645,19 +652,28 @@
       checkKeywords(all);
     };
     rec.onerror = (ev) => {
-      speech.ok = false;
+      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed' || ev.error === 'network') speech.ok = false;
       $('srStatus').textContent = '오류: ' + ev.error;
-      // no-speech / network 등은 잠시 후 재시작, not-allowed 는 포기
-      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') return;
     };
-    rec.onend = () => {
-      // 크롬은 한동안 조용하면 스스로 멈추므로 계속 다시 켬
-      clearTimeout(restartTimer);
-      restartTimer = setTimeout(() => { try { rec.start(); } catch (e) {} }, 400);
-      if (speech.ok) $('srStatus').textContent = '재시작 중';
-    };
-    try { rec.start(); } catch (e) { $('srStatus').textContent = '시작 실패'; }
+    rec.onend = () => { recActive = false; if (SR_MODE === 'auto') $('srStatus').textContent = '대기 (소리 나면 켬)'; };
+    speech.ok = true;
+    $('srStatus').textContent = '대기 (소리 나면 켬)';
+    updateSrButton();
   }
+  // 말소리가 감지되면 호출: 켜져 있지 않으면 켜고, 일정 시간 뒤 끔
+  function listenBurst() {
+    if (!rec || SR_MODE !== 'auto') return;
+    if (!recActive) { try { rec.start(); } catch (e) {} }
+    clearTimeout(recStopTimer);
+    recStopTimer = setTimeout(() => { try { rec.stop(); } catch (e) {} }, SR_LISTEN_MS);
+  }
+  function setSrMode(mode) {
+    SR_MODE = mode;
+    if (mode === 'off') { try { rec && rec.stop(); } catch (e) {} speech.ok = false; $('srStatus').textContent = '끔 (소리 패턴만 사용)'; }
+    else { speech.ok = true; $('srStatus').textContent = '대기 (소리 나면 켬)'; }
+    updateSrButton();
+  }
+  function updateSrButton() { const b = document.getElementById('btnSr'); if (b) b.textContent = SR_MODE === 'auto' ? '음성인식: 켬(A)' : '음성인식: 끔(B)'; }
 
   // ===== 5단계: 효과음 (코드 합성) =====
   const SFX = (() => {
@@ -712,6 +728,9 @@
       shy() { tone(600, 0.2, { gain: 0.12, slideTo: 500 }); tone(500, 0.3, { gain: 0.1, delay: 0.25, slideTo: 420 }); },
     };
   })();
+  // 효과음이 나는 동안은 마이크 판정을 멈춤 (스피커 소리를 외침으로 오인 방지)
+  const SFX_LEN = { eerie: 1900, eerie2: 2200, eerie3: 2200, hello: 900, hello2: 900, giggle: 800, who: 500, who2: 700, hmm: 800, nod: 600, nod2: 700, tada: 1200, boing: 500, whoosh: 700, spin: 800, shy: 800, love: 1700, sparkle: 500, shock: 600, clap: 600, hum: 2500, no: 600, scream: 1200, poof: 600, yawn: 1500, pop: 400 };
+  Object.keys(SFX).forEach(k => { if (k === 'unlock') return; const f = SFX[k]; SFX[k] = () => { muteSound((SFX_LEN[k] || 800) + 300); f(); }; });
   // 브라우저 정책상 첫 클릭/키 입력 뒤에 소리가 나므로, 처음 아무 키나 누르면 열림
   window.addEventListener('keydown', () => SFX.unlock(), { once: true });
   window.addEventListener('pointerdown', () => SFX.unlock(), { once: true });
@@ -1133,12 +1152,14 @@
     if (type === 'clap') return react('clap');
     if (type === 'scream') return react('scream');
     if (type === 'shout' || type === 'talk') {
-      // 음성 인식이 살아 있으면 1.5초 기다렸다가 키워드가 안 잡혔을 때만 끄덕임
+      const useSr = SR_MODE === 'auto' && speech.ok;
+      if (useSr) listenBurst();
+      // 음성인식을 쓰는 중이면 2.5초 기다렸다가 키워드가 안 잡혔을 때만 끄덕임, 아니면 바로 사탕 반응
       const t0 = performance.now();
       setTimeout(() => {
-        if (speech.ok && speech.lastHitAt > t0 - 500) return;
-        if (!speech.ok || type === 'shout') react('candy'); else nodOnly();
-      }, speech.ok ? 1500 : 0);
+        if (useSr && speech.lastHitAt > t0 - 500) return;
+        if (!useSr || type === 'shout') react('candy'); else nodOnly();
+      }, useSr ? 2500 : 0);
     }
   });
   async function nodOnly() { if (busy) return; busy = true; $('vRe').textContent = 'nod'; SFX.nod(); setMouth('big'); await nod(2); resetFace(); busy = false; }
@@ -1243,6 +1264,7 @@
   $('btnSensUp').addEventListener('click', () => setSens(2));
   $('btnMirror').addEventListener('click', toggleMirror);
   $('btnHide').addEventListener('click', () => dbg.classList.add('hidden'));
+  $('btnSr').addEventListener('click', () => setSrMode(SR_MODE === 'auto' ? 'off' : 'auto'));
   const reactBtns = [['지나감','pass','R'],['멈춤','stand'],['인사','wave','one'],['사탕','candy'],['박수','clap'],['비명','scream'],['잠','sleep'],['하트','love']];
   reactBtns.forEach(([label, name, arg]) => { const b = document.createElement('button'); b.textContent = label; b.addEventListener('click', () => react(name, arg)); $('btnReacts').appendChild(b); });
 </script>
