@@ -52,27 +52,20 @@
 
 <video id="cam" autoplay playsinline muted style="display:none"></video>
 <div id="tapZone"></div>
-<div style="position:fixed;right:6px;bottom:4px;color:#8892c8;font:11px monospace;opacity:.6;z-index:5">v9</div>
-<div id="startScreen"><h1>화면을 터치해서 시작</h1><p>카메라와 마이크 권한을 허용해 주세요</p></div>
+<div style="position:fixed;right:6px;bottom:4px;color:#8892c8;font:11px monospace;opacity:.6;z-index:5">v13</div>
+<div id="startScreen"><h1>화면을 터치해서 시작</h1><p>카메라 권한을 허용해 주세요</p></div>
 <div id="debug" class="hidden">
   <canvas id="dbgCanvas" width="96" height="54"></canvas>
   <div>상태: <span id="dbgStatus">카메라 요청 중</span></div>
   <div>좌 <span id="vL">0</span></div><div class="bar"><i id="bL"></i></div>
   <div>중 <span id="vC">0</span></div><div class="bar"><i id="bC"></i></div>
   <div>우 <span id="vR">0</span></div><div class="bar"><i id="bR"></i></div>
-  <div>시선 x <span id="vX">0</span> / 미러 <span id="vM">on</span></div>
-  <div>소리 <span id="vS">0</span></div><div class="bar"><i id="bS" style="background:#ffb0e0"></i></div>
-  <div>마이크: <span id="micStatus">요청 중</span></div>
-  <div>최근 소리: <span id="vEv">-</span></div>
-  <div>민감도 보정: <span id="vSens">0</span> ([ ] 키)</div>
-  <div>음성인식: <span id="srStatus">시작 중</span></div>
-  <div>들린 말: <span id="srText">-</span></div>
-  <div>키워드: <span id="srHit">-</span></div>
-  <div>흔들기 왕복: <span id="vWave">0</span></div>
+  <div>시선 x <span id="vX">0</span> / 미러 <span id="vM">on</span> / 흔들기 <span id="vWave">0</span> / 상단폭 <span id="vSpread">0</span></div>
+  <div>박수깜빡 <span id="vFlash">0</span> / 움직임평균 <span id="vDance">0</span></div>
   <div>반응: <span id="vRe">-</span></div>
-  <div class="row"><button id="btnSensDown">소리 민감도 -</button><button id="btnSensUp">+</button><button id="btnMirror">좌우반전</button><button id="btnPreset">기준: 기기</button><button id="btnSr">음성인식: 켬(A)</button><button id="btnHide">패널 숨김</button></div>
+  <div class="row"><button id="btnBgm">BGM: 끔</button><button id="btnMirror">좌우반전</button><button id="btnHide">패널 숨김</button></div>
   <div class="row" id="btnReacts"></div>
-  <div style="opacity:.7">키보드: d 패널 / m 반전 / [ ] 민감도</div>
+  <div style="opacity:.7">키보드: d 패널 / m 반전 / b BGM</div>
 </div>
 
 <svg id="stage" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
@@ -224,6 +217,7 @@
 
   <g id="bats"></g>
 
+  <g id="follow">
   <g id="ghostRig">
   <!-- ===== 유령 G1 ===== -->
   <!-- 바닥 그림자 -->
@@ -287,6 +281,7 @@
     </g></g>
   </g>
 
+  </g>
   </g>
   <g id="hearts"></g>
   <use href="#sparkle" transform="translate(1320 300) scale(1.8)" fill="#ffe58a"/>
@@ -374,6 +369,10 @@
   const eyeL = document.getElementById('eyeL');
   const eyeR = document.getElementById('eyeR');
   const mouth = document.getElementById('mouth');
+  const followEl = document.getElementById('follow');
+  const followNow = { x: 0, y: 0 };
+  const FOLLOW_X = 170, FOLLOW_Y = 40;
+  window.followOn = true;
   const stage = document.getElementById('stage');
 
   // 마우스는 테스트용 보조 입력: 움직인 뒤 2초 동안만 우선
@@ -390,7 +389,7 @@
   //   motion.total   : 전체 움직임량 (0~1)
   //   motion.left/center/right : 구역별 움직임량 (0~1)
   //   motion.cx, cy  : 움직임 중심 위치 (-1~1, 화면 기준)
-  const motion = { total: 0, left: 0, center: 0, right: 0, centerTop: 0, topBand: 0, bottomBand: 0, topCx: 0, topL: 0, topR: 0, cx: 0, cy: 0, ok: false };
+  const motion = { total: 0, left: 0, center: 0, right: 0, centerTop: 0, topBand: 0, bottomBand: 0, topCx: 0, topL: 0, topR: 0, topSpread: 0, midCenter: 0, cx: 0, cy: 0, ok: false };
   window.motion = motion;
 
   const CAM_W = 96, CAM_H = 54;      // 분석 해상도 (작을수록 가벼움)
@@ -411,6 +410,7 @@
   window.addEventListener('keydown', (e) => {
     if (e.key === 'd') dbg.classList.toggle('hidden');
     if (e.key === 'm') toggleMirror();
+    if (e.key === 'b') BGM.toggle();
   });
 
   function toggleMirror() { MIRROR = !MIRROR; $('vM').textContent = MIRROR ? 'on' : 'off'; }
@@ -437,7 +437,7 @@
       for (let i = 0; i < n; i++) gray[i] = (d[i*4] * 0.3 + d[i*4+1] * 0.59 + d[i*4+2] * 0.11) | 0;
 
       if (prev) {
-        let total = 0, sumX = 0, sumY = 0, zl = 0, zc = 0, zr = 0, zct = 0, tb = 0, bb = 0, tSumX = 0, tL = 0, tR = 0;
+        let total = 0, sumX = 0, sumY = 0, zl = 0, zc = 0, zr = 0, zct = 0, tb = 0, bb = 0, tSumX = 0, tL = 0, tR = 0, tMin = CAM_W, tMax = 0, mc = 0;
         const dd = dctx.createImageData(CAM_W, CAM_H);
         for (let y = 0; y < CAM_H; y++) {
           for (let x = 0; x < CAM_W; x++) {
@@ -446,7 +446,9 @@
             if (moved) {
               total++; sumX += x; sumY += y;
               if (x < CAM_W / 3) zl++; else if (x < CAM_W * 2 / 3) { zc++; if (y < CAM_H / 2) { zct++; tSumX += x; if (x < CAM_W / 2) tL++; else tR++; } } else zr++;
-              if (y < CAM_H * 0.3) tb++; if (y > CAM_H * 0.6) bb++;
+              if (y < CAM_H * 0.3) { tb++; if (x < tMin) tMin = x; if (x > tMax) tMax = x; }
+              if (y > CAM_H * 0.6) bb++;
+              if (x > CAM_W * 0.3 && x < CAM_W * 0.7 && y > CAM_H * 0.3 && y < CAM_H * 0.8) mc++;
               dd.data[i*4] = 255; dd.data[i*4+1] = 240; dd.data[i*4+2] = 120;
             } else {
               const g = gray[i] >> 2;
@@ -461,6 +463,8 @@
         motion.left = zl / zone; motion.center = zc / zone; motion.right = zr / zone; motion.centerTop = zct / (zone / 2);
         motion.topBand = tb / (n * 0.3); motion.bottomBand = bb / (n * 0.4);
         motion.topL = tL / (zone / 4); motion.topR = tR / (zone / 4);
+        motion.topSpread = tb > 3 ? (tMax - tMin) / CAM_W : 0;
+        motion.midCenter = mc / (n * 0.2);
         if (zct > 0) { let tx = (tSumX / zct) / CAM_W * 2 - 1; if (MIRROR) tx = -tx; motion.topCx = tx; }
         if (motion.total > MIN_MOTION) {
           let cx = (sumX / total) / CAM_W * 2 - 1;
@@ -479,215 +483,15 @@
         $('vL').textContent = motion.left.toFixed(3);  $('bL').style.width = Math.min(100, motion.left * 2000) + '%';
         $('vC').textContent = motion.center.toFixed(3); $('bC').style.width = Math.min(100, motion.center * 2000) + '%';
         $('vR').textContent = motion.right.toFixed(3); $('bR').style.width = Math.min(100, motion.right * 2000) + '%';
-        $('vX').textContent = motion.cx.toFixed(2);
+        $('vX').textContent = motion.cx.toFixed(2); $('vSpread').textContent = motion.topSpread.toFixed(2);
       }
       prev = gray;
     }
     setTimeout(analyze, 40); // 초당 약 25회 분석
   }
 
-  // ===== 3단계: 마이크 소리 감지 =====
-  // 결과는 window.sound 에 갱신됨
-  //   sound.level : 현재 소리 크기 (0~1)
-  //   sound.db    : 주변 소음 대비 현재 크기 (dB). 0 = 조용할 때와 같음
-  //   sound.event : 마지막 판정 ('clap' 박수 두 번 / 'shout' 외침 / 'talk' 말하기 / 'scream' 아주 큰 소리)
-  const sound = { level: 0, db: 0, event: null, eventAt: 0, ok: false };
-  let muteUntil = 0;                         // 이 시각까지는 소리 판정 안 함 (자기 효과음·음성인식 시작음 무시)
-  function muteSound(ms) { muteUntil = Math.max(muteUntil, performance.now() + ms); }
-  window.sound = sound;
-  const soundListeners = [];
-  window.onSound = fn => soundListeners.push(fn);
-
-  // 판정 기준은 전부 "주변 소음 대비 몇 dB 큰가"로 잡아서 장소가 바뀌어도 자동으로 맞춰짐
-  let SENS = 0;                 // 전체 민감도 보정 (dB). [ ] 키 또는 패널 버튼
-  // 기준 프리셋: 기기 마이크는 자동 음량 조절 때문에 조용함~외침 차이가 작아서 값이 낮음
-  const PRESETS = { device: { talk: 6, shout: 11, scream: 20 }, mac: { talk: 14, shout: 34, scream: 44 } };
-  let PRESET = 'device';
-  let TALK_DB = PRESETS[PRESET].talk, SHOUT_DB = PRESETS[PRESET].shout, SCREAM_DB = PRESETS[PRESET].scream;
-  function setPreset(name) {
-    PRESET = name; TALK_DB = PRESETS[name].talk; SHOUT_DB = PRESETS[name].shout; SCREAM_DB = PRESETS[name].scream; SENS = 0;
-    $('vSens').textContent = SENS;
-    const b = document.getElementById('btnPreset'); if (b) b.textContent = '기준: ' + (name === 'device' ? '기기' : '맥') + ' (' + TALK_DB + '/' + SHOUT_DB + '/' + SCREAM_DB + ')';
-  }
-  const CLAP_MAX_MS = 90;       // 박수 한 번의 최대 길이
-  const CLAP_GAP_MIN = 120, CLAP_GAP_MAX = 700;
-  const QUIET_BEFORE_MS = 250;  // 박수로 치려면 직전 이 시간 동안 조용했어야 함 (말소리 음절과 구분)
-  const SHOUT_MIN_MS = 100, SHOUT_MAX_MS = 700;
-  const TALK_MIN_MS = 600;
-  const EVENT_COOLDOWN = 1200;
-
-  function fireSound(type, db) {
-    const now = performance.now();
-    if ((type === 'talk' || type === 'shout') && typeof listenBurst === 'function') listenBurst();
-    if (sound.event === type && now - sound.eventAt < EVENT_COOLDOWN) return;
-    sound.event = type; sound.eventAt = now;
-    $('vEv').textContent = type + ' (' + db.toFixed(0) + 'dB)';
-    soundListeners.forEach(fn => fn(type, db));
-  }
-
-  window.addEventListener('keydown', (e) => {
-    if (e.key === '[') setSens(-2);
-    if (e.key === ']') setSens(2);
-  });
-
-  function setSens(d) { SENS += d; $('vSens').textContent = SENS; }
-  async function startMic() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
-      const ac = new (window.AudioContext || window.webkitAudioContext)();
-      const src = ac.createMediaStreamSource(stream);
-      const an = ac.createAnalyser();
-      an.fftSize = 1024;
-      src.connect(an);
-      const buf = new Float32Array(an.fftSize);
-      sound.ok = true;
-      $('micStatus').textContent = '동작 중';
-
-      let floor = 0.002;                 // 주변 소음 바닥
-      const floorHist = [];              // 최근 4초 rms 표본 (0.1초마다)
-      let floorSampleAt = 0;
-      let above = false, burstStart = 0, burstPeakDb = 0;
-      let lastBurstEnd = -9999, lastBurstLen = 0, lastBurstWasClap = false;
-      let lastQuietAt = 0;               // 마지막으로 조용했던 시각
-      let talking = false, talkStart = 0;
-
-      function loop() {
-        an.getFloatTimeDomainData(buf);
-        let sum = 0;
-        for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-        const rms = Math.min(1, Math.sqrt(sum / buf.length));
-        const now = performance.now();
-
-        // 소음 바닥: 최근 4초 표본의 하위 30% 값 (바닥이 들쭉날쭉한 마이크에서도 안정)
-        if (now - floorSampleAt > 100) {
-          floorSampleAt = now; floorHist.push(rms); if (floorHist.length > 40) floorHist.shift();
-          const sorted = floorHist.slice().sort((a, b) => a - b);
-          floor = Math.max(0.0005, sorted[Math.floor(sorted.length * 0.3)]);
-        }
-
-        const db = Math.max(0, 20 * Math.log10(rms / floor)) - SENS;
-        sound.level = rms; sound.db = db;
-        $('vS').textContent = db.toFixed(0) + 'dB' + (now < muteUntil ? ' (자기소리 무시 중)' : '');
-        $('bS').style.width = Math.min(100, db / 50 * 100) + '%';
-
-        if (db < TALK_DB) lastQuietAt = now;
-        if (now < muteUntil) { above = false; talking = false; lastQuietAt = now; requestAnimationFrame(loop); return; }
-
-        // 큰 소리 묶음(burst)
-        if (db > SHOUT_DB) {
-          if (!above) { above = true; burstStart = now; burstPeakDb = 0; }
-          burstPeakDb = Math.max(burstPeakDb, db);
-        } else if (above) {
-          above = false;
-          const len = now - burstStart;
-          const wasQuiet = (burstStart - lastQuietAtBeforeBurst) <= 40;
-          if (burstPeakDb > SCREAM_DB && len > 450) {
-            fireSound('scream', burstPeakDb); lastBurstLen = 0;
-          } else if (len <= CLAP_MAX_MS && wasQuiet) {
-            const gap = burstStart - lastBurstEnd;
-            if (lastBurstWasClap && gap >= CLAP_GAP_MIN && gap <= CLAP_GAP_MAX) {
-              fireSound('clap', burstPeakDb); lastBurstWasClap = false;
-            } else { lastBurstWasClap = true; }
-          } else if (len >= SHOUT_MIN_MS && len <= SHOUT_MAX_MS) {
-            fireSound('shout', burstPeakDb); lastBurstWasClap = false;
-          } else {
-            lastBurstWasClap = false;
-          }
-          lastBurstEnd = now; lastBurstLen = len;
-        }
-        if (!above) lastQuietAtBeforeBurst = lastQuietAt;
-
-        // 말하기: TALK_DB 이상이 이어지되, 큰 소리 묶음 중이 아닐 때
-        if (db > TALK_DB) {
-          if (!talking) { talking = true; talkStart = now; }
-          else if (now - talkStart > TALK_MIN_MS && !above && db < SHOUT_DB) { fireSound('talk', db); talkStart = now + 2500; }
-        } else if (talking && now - lastQuietAt > 350) { talking = false; }
-
-        requestAnimationFrame(loop);
-      }
-      let lastQuietAtBeforeBurst = 0;
-      loop();
-    } catch (err) {
-      $('micStatus').textContent = '실패: ' + err.name;
-    }
-  }
-
-  // ===== 4단계: 음성 인식 키워드 (ㄷ 방식: 안 되면 3단계 소리 패턴이 대신 반응) =====
-  // 결과는 window.speech 에 갱신되고, 키워드가 잡히면 onSpeech 리스너로 'candy' 가 전달됨
-  const speech = { ok: false, lastText: '', lastHit: null, lastHitAt: 0 };
-  window.speech = speech;
-  const speechListeners = [];
-  window.onSpeech = fn => speechListeners.push(fn);
-
-  // 사탕 요청으로 볼 키워드 (띄어쓰기 무시하고 포함 여부만 봄)
-  const CANDY_WORDS = ['트릭', '트릿', '츄릭', '트리커', '트리코', '틀릭', '트익', '사탕', '사당', '싸탕', '캔디', '켄디', '캔티', '캔디', '먹어도', '먹어', '먹을', '머거', '가져가', '가져도', '가저', '주세요', '주세', '줘'];
-  const LOVE_WORDS = ['사랑', '하트', '러브', '좋아해', '사랑해', '아이러브유', '러뷰', 'loveyou', 'love', 'heart'];
-  const SPEECH_COOLDOWN = 2500;
-
-  function checkKeywords(text) {
-    const t = text.replace(/\s+/g, '').toLowerCase();
-    const love = LOVE_WORDS.find(w => t.includes(w));
-    const hit = love || CANDY_WORDS.find(w => t.includes(w));
-    if (!hit) return;
-    const now = performance.now();
-    if (now - speech.lastHitAt < SPEECH_COOLDOWN) return;
-    speech.lastHit = hit; speech.lastHitAt = now;
-    const kind = love ? 'love' : 'candy';
-    $('srHit').textContent = hit + ' → ' + kind;
-    speechListeners.forEach(fn => fn(kind, hit));
-  }
-
-  // 음성인식 모드: 'auto' = 말소리가 감지될 때만 잠깐 켬 (A), 'off' = 안 씀 (B)
-  let SR_MODE = 'auto';
-  let rec = null, recActive = false, recStopTimer = null, recEndedAt = -9999;
-  const SR_LISTEN_MS = 5000;     // 한 번 켜면 이만큼 듣고 끔
-
-  function startSpeech() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { $('srStatus').textContent = '이 브라우저는 미지원'; return; }
-    rec = new SR();
-    rec.lang = 'ko-KR';
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.maxAlternatives = 3;
-    rec.onstart = () => { speech.ok = true; recActive = true; $('srStatus').textContent = '듣는 중'; muteSound(1200); };
-    rec.onresult = (ev) => {
-      let text = '', all = '';
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        text += ev.results[i][0].transcript;
-        for (let k = 0; k < ev.results[i].length; k++) all += ' ' + ev.results[i][k].transcript;
-      }
-      speech.lastText = text;
-      let finalText = '';
-      for (let i = 0; i < ev.results.length; i++) if (ev.results[i].isFinal) finalText += ev.results[i][0].transcript;
-      if (finalText) $('srText').textContent = finalText.slice(-20);
-      checkKeywords(all);
-    };
-    rec.onerror = (ev) => {
-      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed' || ev.error === 'network') speech.ok = false;
-      $('srStatus').textContent = '오류: ' + ev.error;
-    };
-    rec.onend = () => { recActive = false; recEndedAt = performance.now(); muteSound(1500); if (SR_MODE === 'auto') $('srStatus').textContent = '대기 (소리 나면 켬)'; };
-    speech.ok = true;
-    $('srStatus').textContent = '대기 (소리 나면 켬)';
-    updateSrButton();
-  }
-  // 말소리가 감지되면 호출: 켜져 있지 않으면 켜고, 일정 시간 뒤 끔
-  function listenBurst() {
-    if (!rec || SR_MODE !== 'auto') return;
-    if (!recActive && performance.now() - recEndedAt < 2500) return;   // 종료음 직후엔 다시 켜지 않음
-    if (!recActive) { muteSound(1200); try { rec.start(); } catch (e) {} }
-    clearTimeout(recStopTimer);
-    recStopTimer = setTimeout(() => { muteSound(1500); try { rec.stop(); } catch (e) {} }, SR_LISTEN_MS);
-  }
-  function setSrMode(mode) {
-    SR_MODE = mode;
-    if (mode === 'off') { try { rec && rec.stop(); } catch (e) {} speech.ok = false; $('srStatus').textContent = '끔 (소리 패턴만 사용)'; }
-    else { speech.ok = true; $('srStatus').textContent = '대기 (소리 나면 켬)'; }
-    updateSrButton();
-  }
-  function updateSrButton() { const b = document.getElementById('btnSr'); if (b) b.textContent = SR_MODE === 'auto' ? '음성인식: 켬(A)' : '음성인식: 끔(B)'; }
+  // (마이크·소리 판정은 사용하지 않음)
+  let muteUntil = 0; function muteSound(ms) {}
 
   // ===== 5단계: 효과음 (코드 합성) =====
   const SFX = (() => {
@@ -740,12 +544,80 @@
       spin() { tone(300, 0.6, { type: 'triangle', gain: 0.14, slideTo: 1200, vib: 20 }); },
       love() { [523, 659, 784, 1046].forEach((f, i) => tone(f, 0.5, { type: 'triangle', gain: 0.12, delay: i * 0.12, vib: 6 })); tone(1318, 0.9, { gain: 0.1, delay: 0.5, vib: 8 }); },
       sparkle() { [1200, 1600, 2000, 2400].forEach((f, i) => tone(f, 0.12, { gain: 0.08, delay: i * 0.06 })); },
+      sing() { const m = [392, 440, 494, 523, 494, 440, 392, 440, 494, 440, 392]; m.forEach((f, i) => tone(f, 0.34, { type: 'triangle', gain: 0.12, delay: i * 0.32, vib: 5 })); },
+      beat() { for (let i = 0; i < 8; i++) { noise(0.06, { gain: 0.22, delay: i * 0.25, lp: 400 }); if (i % 2) tone(1800, 0.05, { gain: 0.08, delay: i * 0.25 }); } },
+      awe() { [523, 659, 784, 988, 1175].forEach((f, i) => tone(f, 0.7, { type: 'triangle', gain: 0.1, delay: i * 0.15, vib: 4 })); },
       shy() { tone(600, 0.2, { gain: 0.12, slideTo: 500 }); tone(500, 0.3, { gain: 0.1, delay: 0.25, slideTo: 420 }); },
     };
   })();
+  // ===== BGM (코드 합성, 반복) =====
+  const BGM = (() => {
+    let ac = null, out = null, running = false, timer = null, step = 0;
+    const BPM = 72; const BEAT = 60 / BPM;
+    // 단조 느낌의 저음 진행 + 종소리 아르페지오 (직접 지은 단순 패턴)
+    const BASS = [110, 110, 103.8, 98, 87.3, 87.3, 98, 103.8];                 // A, A, G#, G, F, F, G, G#
+    const ARP = [[440, 523, 659, 523], [440, 523, 659, 523], [415, 523, 622, 523], [392, 494, 587, 494],
+                 [349, 440, 523, 440], [349, 440, 523, 440], [392, 494, 587, 494], [415, 523, 622, 523]];
+    function ctx() {
+      if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)(); out = ac.createGain(); out.gain.value = 0.35; out.connect(ac.destination); }
+      if (ac.state === 'suspended') ac.resume();
+      return ac;
+    }
+    function pad(freq, t0, dur) {              // 저음 패드: 두 오실레이터 살짝 어긋나게 + 로우패스
+      const c = ctx();
+      [0, 1.5].forEach(det => {
+        const o = c.createOscillator(), g = c.createGain(), f = c.createBiquadFilter();
+        o.type = 'sawtooth'; o.frequency.value = freq; o.detune.value = det;
+        f.type = 'lowpass'; f.frequency.value = 420;
+        g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.09, t0 + 0.6); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        o.connect(f); f.connect(g); g.connect(out); o.start(t0); o.stop(t0 + dur + 0.1);
+      });
+    }
+    function bell(freq, t0, dur) {             // 종소리: 사인파 + 배음 하나, 빠르게 사라짐
+      const c = ctx();
+      [[1, 0.08], [2.76, 0.02]].forEach(([mul, vol]) => {
+        const o = c.createOscillator(), g = c.createGain();
+        o.type = 'sine'; o.frequency.value = freq * mul;
+        g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        o.connect(g); g.connect(out); o.start(t0); o.stop(t0 + dur + 0.1);
+      });
+    }
+    function wind(t0, dur) {                   // 가끔 지나가는 바람
+      const c = ctx();
+      const b = c.createBuffer(1, c.sampleRate * dur, c.sampleRate); const d = b.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      const src = c.createBufferSource(); src.buffer = b;
+      const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.setValueAtTime(300, t0); f.frequency.linearRampToValueAtTime(900, t0 + dur / 2); f.frequency.linearRampToValueAtTime(250, t0 + dur); f.Q.value = 1.2;
+      const g = c.createGain(); g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.05, t0 + dur / 2); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      src.connect(f); f.connect(g); g.connect(out); src.start(t0);
+    }
+    function scheduleBar() {
+      const c = ctx(); const t0 = c.currentTime + 0.05;
+      const bar = step % BASS.length;
+      pad(BASS[bar], t0, BEAT * 4);
+      ARP[bar].forEach((f, i) => { if (Math.random() < 0.85) bell(f, t0 + i * BEAT, BEAT * 1.6); });
+      if (Math.random() < 0.18) wind(t0, BEAT * 3);
+      step++;
+      timer = setTimeout(scheduleBar, BEAT * 4 * 1000 - 40);
+    }
+    return {
+      start() { if (running) return; running = true; scheduleBar(); updateBgmButton(); },
+      stop() { if (!running) return; running = false; clearTimeout(timer); if (out) { out.gain.cancelScheduledValues(ac.currentTime); out.gain.setValueAtTime(out.gain.value, ac.currentTime); out.gain.linearRampToValueAtTime(0.0001, ac.currentTime + 0.5); } setTimeout(() => { if (!running && out) out.gain.value = 0.35; }, 600); updateBgmButton(); },
+      toggle() { running ? this.stop() : this.start(); },
+      isOn() { return running; },
+      duck(ms) {                               // 효과음 동안 잠깐 줄였다가 복귀
+        if (!running || !out) return;
+        const t = ac.currentTime;
+        out.gain.cancelScheduledValues(t); out.gain.setValueAtTime(out.gain.value, t);
+        out.gain.linearRampToValueAtTime(0.12, t + 0.1); out.gain.linearRampToValueAtTime(0.35, t + ms / 1000 + 0.6);
+      },
+    };
+  })();
+  function updateBgmButton() { const b = document.getElementById('btnBgm'); if (b) b.textContent = 'BGM: ' + (BGM.isOn() ? '켬' : '끔'); }
+
   // 효과음이 나는 동안은 마이크 판정을 멈춤 (스피커 소리를 외침으로 오인 방지)
-  const SFX_LEN = { eerie: 1900, eerie2: 2200, eerie3: 2200, hello: 900, hello2: 900, giggle: 800, who: 500, who2: 700, hmm: 800, nod: 600, nod2: 700, tada: 1200, boing: 500, whoosh: 700, spin: 800, shy: 800, love: 1700, sparkle: 500, shock: 600, clap: 600, hum: 2500, no: 600, scream: 1200, poof: 600, yawn: 1500, pop: 400 };
-  Object.keys(SFX).forEach(k => { if (k === 'unlock') return; const f = SFX[k]; SFX[k] = () => { muteSound((SFX_LEN[k] || 800) + 900); f(); }; });
+  const SFX_LEN = { sing: 3800, beat: 2200, awe: 1500, eerie: 1900, eerie2: 2200, eerie3: 2200, hello: 900, hello2: 900, giggle: 800, who: 500, who2: 700, hmm: 800, nod: 600, nod2: 700, tada: 1200, boing: 500, whoosh: 700, spin: 800, shy: 800, love: 1700, sparkle: 500, shock: 600, clap: 600, hum: 2500, no: 600, scream: 1200, poof: 600, yawn: 1500, pop: 400 };
+  Object.keys(SFX).forEach(k => { if (k === 'unlock') return; const f = SFX[k]; SFX[k] = () => { muteSound((SFX_LEN[k] || 800) + 900); BGM.duck(SFX_LEN[k] || 800); f(); }; });
   // 브라우저 정책상 첫 클릭/키 입력 뒤에 소리가 나므로, 처음 아무 키나 누르면 열림
   window.addEventListener('keydown', () => SFX.unlock(), { once: true });
   window.addEventListener('pointerdown', () => SFX.unlock(), { once: true });
@@ -863,133 +735,33 @@
     return () => { lookTarget.x = sx; lookTarget.y = sy; mouseUntil = 0; };
   }
 
-  // ----- 반응 세트 (각 반응마다 여러 변형 중 랜덤) -----
-  const R = {};
-  R.pass = async (side) => {
-    const s = side === 'R' ? 1 : -1;
-    const pick = rnd(['eyes', 'beckon', 'beckon', 'peek', 'wink']);
-    if (pick === 'eyes') return;                       // 눈만 따라감
-    if (pick === 'beckon') { rnd([SFX.eerie, SFX.eerie2, SFX.eerie3])(); setMouth('big'); await beckon(side); }
-    if (pick === 'peek') {                             // 그쪽으로 몸을 기울여 빼꼼
-      SFX.eerie2(); face.eyeSx = 1.25; face.eyeSy = 1.2; setMouth('o');
-      await tween(500, t => setRig(160 * s * t, -30 * t, 1, 10 * s * t), ease.out);
-      await wait(1000);
-      await tween(500, t => setRig(160 * s * (1 - t), -30 * (1 - t), 1, 10 * s * (1 - t)));
-    }
-    if (pick === 'wink') {                             // 윙크 + 작은 손짓
-      SFX.giggle(); setMouth('big');
-      const el = side === 'R' ? handR : handL, base = side === 'R' ? HR : HL;
-      const eye = side === 'R' ? 'R' : 'L';
-      await Promise.all([
-        tween(300, t => setHand(el, base, 0, -180 * t, -20 * s * t), ease.out),
-        tween(200, t => { face.eyeSy = 1 - 0.85 * t; }),
-      ]);
-      await wait(700);
-      await Promise.all([
-        tween(300, t => setHand(el, base, 0, -180 * (1 - t), -20 * s * (1 - t))),
-        tween(200, t => { face.eyeSy = 0.15 + 0.85 * t; }),
-      ]);
-    }
-    resetFace();
-  };
-  R.stand = async () => {
-    const pick = rnd(['tilt', 'lean', 'suspicious', 'bounce']);
-    if (pick === 'tilt') { SFX.who(); face.eyeSx = 1.35; face.eyeSy = 1.3; setMouth('o'); await tilt(); }
-    if (pick === 'lean') {                             // 앞으로 쑥 다가옴
-      SFX.who2(); face.eyeSx = 1.4; face.eyeSy = 1.35; setMouth('o');
-      await tween(500, t => setRig(0, 60 * t, 1 + 0.18 * t, 0), ease.out);
-      await wait(1000);
-      await tween(500, t => setRig(0, 60 * (1 - t), 1.18 - 0.18 * t, 0));
-    }
-    if (pick === 'suspicious') {                       // 눈 가늘게 뜨고 의심
-      SFX.hmm(); face.eyeSy = 0.45; setBrows('one'); setMouth('flat');
-      await tween(400, t => setRig(0, 0, 1, 6 * t));
-      await tween(400, t => setHand(handR, HR, -120 * t, 100 * t, 30 * t), ease.out);   // 턱 괴듯
-      await wait(1100);
-      await Promise.all([tween(400, t => setRig(0, 0, 1, 6 * (1 - t))), tween(400, t => setHand(handR, HR, -120 * (1 - t), 100 * (1 - t), 30 * (1 - t)))]);
-    }
-    if (pick === 'bounce') {                           // 반가워서 통통
-      SFX.hello2(); setMouth('big');
-      for (let i = 0; i < 3; i++) { SFX.boing(); await tween(180, t => setRig(0, -70 * t, 1 + 0.05 * t, 0), ease.out); await tween(220, t => setRig(0, -70 * (1 - t), 1.05 - 0.05 * t, 0), ease.in); }
-    }
-    resetFace();
-  };
-  R.wave = async (how) => {
-    const pick = how === 'both' ? 'both' : rnd(['right', 'circle', 'shy', 'both']);
-    if (pick === 'right') { rnd([SFX.hello, SFX.hello2])(); setMouth('big'); await waveHand('R', 3); }
-    if (pick === 'both') { SFX.tada(); setMouth('big'); await Promise.all([waveHand('R', 3), waveHand('L', 3)]); }
-    if (pick === 'circle') {                           // 팔 크게 휘두르기
-      SFX.whoosh(); setMouth('big');
-      await tween(1100, t => { const a = t * Math.PI * 2; setHand(handR, HR, -150 + 150 * Math.cos(a), -200 - 150 * Math.sin(a), 360 * t); }, t => t);
-      await tween(300, t => setHand(handR, HR, 0, 0, 0));
-    }
-    if (pick === 'shy') {                              // 수줍게 작게 흔들며 눈웃음
-      SFX.shy(); face.eyeSy = 0.2; setMouth('smile');
-      await tween(400, t => setHand(handL, HL, 40 * t, -120 * t, 0), ease.out);
-      for (let i = 0; i < 3; i++) { await tween(140, t => setHand(handL, HL, 40, -120, 12 * t)); await tween(140, t => setHand(handL, HL, 40, -120, 12 - 12 * t)); }
-      await tween(400, t => setHand(handL, HL, 40 * (1 - t), -120 * (1 - t), 0));
-    }
-    resetFace();
-  };
-  R.candy = async () => {
-    const pick = rnd(['nodpoint', 'winkpoint', 'bothpresent', 'bowpoint']);
-    const back = () => {};
-    if (pick === 'nodpoint') { rnd([SFX.nod, SFX.nod2])(); setMouth('big'); await nod(2); const b = await lookDownAt(0.95, 300); await pointDown(); b(); }
-    if (pick === 'winkpoint') {
-      SFX.giggle(); setMouth('big'); await tween(200, t => { face.eyeSy = 1 - 0.85 * t; });
-      const b = await lookDownAt(0.95, 200); await pointDown(); b();
-    }
-    if (pick === 'bothpresent') {                      // 양손으로 "자, 여기" 내밀기
-      SFX.tada(); setMouth('big');
-      const b = await lookDownAt(0.95, 300);
-      await Promise.all([tween(500, t => setHand(handL, HL, 120 * t, 300 * t, -40 * t), ease.out), tween(500, t => setHand(handR, HR, -120 * t, 300 * t, 40 * t), ease.out)]);
-      for (let i = 0; i < 2; i++) { await Promise.all([tween(220, t => setHand(handL, HL, 120, 300 + 40 * t, -40)), tween(220, t => setHand(handR, HR, -120, 300 + 40 * t, 40))]); await Promise.all([tween(220, t => setHand(handL, HL, 120, 340 - 40 * t, -40)), tween(220, t => setHand(handR, HR, -120, 340 - 40 * t, 40))]); }
-      await wait(400);
-      await Promise.all([tween(500, t => setHand(handL, HL, 120 * (1 - t), 300 * (1 - t), -40 * (1 - t))), tween(500, t => setHand(handR, HR, -120 * (1 - t), 300 * (1 - t), 40 * (1 - t)))]);
-      b();
-    }
-    if (pick === 'bowpoint') {                         // 꾸벅 인사하고 가리키기
-      SFX.nod2(); setMouth('smile');
-      await tween(400, t => setRig(0, 60 * t, 1, 0, 1), ease.out); await wait(300);
-      await tween(400, t => setRig(0, 60 * (1 - t), 1, 0, 1));
-      const b = await lookDownAt(0.95, 200); await pointDown(); b();
-    }
-    resetFace();
-  };
-  R.clap = async () => {
-    const pick = rnd(['shock', 'clap', 'hum', 'no', 'spin', 'jump']);
-    if (pick === 'shock') {
-      SFX.shock(); face.eyeSx = 1.6; face.eyeSy = 0.55; setBrows('up'); setMouth('open');
-      await tween(250, t => setRig(0, -60 * t, 1 + 0.08 * t, 0), ease.back);
-      await Promise.all([tween(300, t => setHand(handL, HL, -60 * t, -200 * t, -40 * t), ease.out), tween(300, t => setHand(handR, HR, 60 * t, -200 * t, 40 * t), ease.out)]);
-      await wait(1100);
-      await Promise.all([tween(400, t => setRig(0, -60 * (1 - t), 1.08 - 0.08 * t, 0)), tween(400, t => setHand(handL, HL, -60 * (1 - t), -200 * (1 - t), -40 * (1 - t))), tween(400, t => setHand(handR, HR, 60 * (1 - t), -200 * (1 - t), 40 * (1 - t)))]);
-    } else if (pick === 'clap') {
-      setMouth('big');
-      for (let i = 0; i < 3; i++) {
-        SFX.clap();
-        await Promise.all([tween(160, t => setHand(handL, HL, 250 * t, -80, 20), ease.in), tween(160, t => setHand(handR, HR, -250 * t, -80, -20), ease.in)]);
-        await Promise.all([tween(200, t => setHand(handL, HL, 250 - 250 * t, -80, 20)), tween(200, t => setHand(handR, HR, -250 + 250 * t, -80, -20))]);
-      }
-    } else if (pick === 'hum') {
-      SFX.hum(); face.eyeSy = 0.15; setMouth('wobble');
-      for (let i = 0; i < 4; i++) { await tween(280, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 6 * t)); await tween(280, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 6 * (1 - t))); }
-    } else if (pick === 'no') {
-      SFX.no(); setBrows('angry'); setMouth('flat');
-      await tween(300, t => setHand(handR, HR, -120 * t, -220 * t, 0), ease.out);
-      for (let i = 0; i < 3; i++) { await tween(160, t => setHand(handR, HR, -120, -220, -25 + 50 * t)); await tween(160, t => setHand(handR, HR, -120, -220, 25 - 50 * t)); }
-      await tween(350, t => setHand(handR, HR, -120 * (1 - t), -220 * (1 - t), 0));
-    } else if (pick === 'spin') {                      // 제자리 한 바퀴
-      SFX.spin(); setMouth('big');
-      await tween(900, t => setRig(0, -40 * Math.sin(t * Math.PI), 1, 360 * t), ease.inOut);
-      SFX.pop(); face.eyeSx = 1.3; face.eyeSy = 1.3; await wait(300);
-    } else {                                           // 신나서 점프
-      setMouth('big');
-      for (let i = 0; i < 3; i++) { SFX.boing(); await tween(200, t => setRig(0, -120 * t, 1 + 0.06 * t, 0), ease.out); await tween(260, t => setRig(0, -120 * (1 - t), 1.06 - 0.06 * t, 0), ease.in); }
-    }
-    resetFace();
-  };
-  // 하트 생성 (랜덤 모션 4종)
+  // ----- 공통 동작 조각 -----
+  async function bothHands(dxL, dyL, rL, dxR, dyR, rR, ms = 400, e = ease.out) {
+    await Promise.all([tween(ms, t => setHand(handL, HL, dxL * t, dyL * t, rL * t), e), tween(ms, t => setHand(handR, HR, dxR * t, dyR * t, rR * t), e)]);
+  }
+  async function bothHandsBack(dxL, dyL, rL, dxR, dyR, rR, ms = 400) {
+    await Promise.all([tween(ms, t => setHand(handL, HL, dxL * (1 - t), dyL * (1 - t), rL * (1 - t))), tween(ms, t => setHand(handR, HR, dxR * (1 - t), dyR * (1 - t), rR * (1 - t)))]);
+  }
+  async function jump(times = 3, h = 120) {
+    for (let i = 0; i < times; i++) { SFX.boing(); await tween(200, t => setRig(0, -h * t, 1 + 0.06 * t, 0), ease.out); await tween(260, t => setRig(0, -h * (1 - t), 1.06 - 0.06 * t, 0), ease.in); }
+  }
+  async function spinOnce(ms = 900) {
+    SFX.spin(); await tween(ms, t => setRig(0, -40 * Math.sin(t * Math.PI), 1, 360 * t), ease.inOut);
+  }
+  async function flyAwayAndBack(dir = 1) {   // 저 멀리 날아갔다가 돌아옴
+    SFX.whoosh(); setMouth('big');
+    await tween(700, t => setRig(dir * 900 * t, -500 * t, 1 - 0.8 * t, dir * 25 * t, 1 - 0.6 * t), ease.in);
+    await wait(500); SFX.whoosh();
+    await tween(700, t => setRig(dir * 900 * (1 - t), -500 * (1 - t), 0.2 + 0.8 * t, dir * 25 * (1 - t), 0.4 + 0.6 * t), ease.out);
+    await tween(200, t => setRig(0, 20 * Math.sin(t * Math.PI), 1, 0, 1));
+  }
+  function blush(on) {
+    if (on) { cheekL.setAttribute('transform', 'translate(134 243) scale(2.2) translate(-134 -243)'); cheekR.setAttribute('transform', 'translate(266 243) scale(2.2) translate(-266 -243)'); cheekL.setAttribute('opacity', 1.6); cheekR.setAttribute('opacity', 1.6); }
+    else { cheekL.removeAttribute('transform'); cheekR.removeAttribute('transform'); cheekL.removeAttribute('opacity'); cheekR.removeAttribute('opacity'); }
+  }
+  const cheekL = document.getElementById('cheekL'), cheekR = document.getElementById('cheekR');
+
+  // 하트 연출 5종
   const heartsLayer = document.getElementById('hearts');
   function makeHeart(x, y, sc) {
     const u = document.createElementNS(NS, 'use');
@@ -997,28 +769,28 @@
     u.setAttribute('transform', `translate(${x} ${y}) scale(${sc})`);
     heartsLayer.appendChild(u); return u;
   }
-  async function heartShow() {
-    const pick = rnd(['pop', 'rain', 'pulse', 'spin', 'pyong', 'pyong']);
+  async function heartShow(forced) {
+    const pick = forced || rnd(['pop', 'rain', 'pulse', 'spin', 'pyong', 'pyong']);
     const cleanup = [];
-    if (pick === 'pop') {                      // 큰 하트가 통 튀어나왔다가 사라짐
+    if (pick === 'pop') {
       const h = makeHeart(960, 300, 0); cleanup.push(h);
       await tween(500, t => h.setAttribute('transform', `translate(960 300) scale(${6 * t})`), ease.back);
       for (let i = 0; i < 2; i++) { await tween(200, t => h.setAttribute('transform', `translate(960 300) scale(${6 + 0.8 * t})`)); await tween(200, t => h.setAttribute('transform', `translate(960 300) scale(${6.8 - 0.8 * t})`)); }
       await tween(400, t => h.setAttribute('transform', `translate(960 ${300 - 200 * t}) scale(${6 * (1 - t)})`), ease.in);
     }
-    if (pick === 'rain') {                     // 하트 여러 개가 아래서 위로 둥실둥실
+    if (pick === 'rain') {
       const hs = [];
-      for (let i = 0; i < 12; i++) { const h = makeHeart(300 + Math.random() * 1320, 1150, 0.8 + Math.random() * 2.2); h.dataset.x = h.getAttribute('transform'); hs.push({ el: h, x: 300 + Math.random() * 1320, sc: 0.8 + Math.random() * 2.2, d: Math.random() * 600, w: Math.random() * 80 }); cleanup.push(h); }
+      for (let i = 0; i < 12; i++) { const h = makeHeart(300 + Math.random() * 1320, 1150, 1); hs.push({ el: h, x: 300 + Math.random() * 1320, sc: 0.8 + Math.random() * 2.2, d: Math.random() * 600, w: Math.random() * 80 }); cleanup.push(h); }
       const t0 = performance.now();
       await new Promise(res => { (function st() { const el = performance.now() - t0; let alive = false; for (const h of hs) { const t = Math.min(1, Math.max(0, (el - h.d) / 2400)); if (t < 1) alive = true; const y = 1150 - 1400 * t; const x = h.x + Math.sin(el / 300 + h.d) * h.w; h.el.setAttribute('transform', `translate(${x} ${y}) scale(${h.sc})`); h.el.setAttribute('opacity', t < 0.85 ? 1 : (1 - t) / 0.15); } if (alive) requestAnimationFrame(st); else res(); })(); });
     }
-    if (pick === 'pulse') {                    // 중앙 큰 하트가 두근두근
+    if (pick === 'pulse') {
       const h = makeHeart(960, 280, 0); cleanup.push(h);
       await tween(300, t => h.setAttribute('transform', `translate(960 280) scale(${5 * t})`), ease.out);
       for (let i = 0; i < 4; i++) { SFX.pop(); await tween(140, t => h.setAttribute('transform', `translate(960 280) scale(${5 + 1.5 * t})`), ease.out); await tween(260, t => h.setAttribute('transform', `translate(960 280) scale(${6.5 - 1.5 * t})`)); }
       await tween(300, t => { h.setAttribute('transform', `translate(960 280) scale(${5 + 3 * t})`); h.setAttribute('opacity', 1 - t); });
     }
-    if (pick === 'pyong') {                    // 작은 하트들이 유령 주변에 뿅뿅뿅
+    if (pick === 'pyong') {
       const spots = [];
       for (let i = 0; i < 9; i++) spots.push({ x: 620 + Math.random() * 680, y: 180 + Math.random() * 520, sc: 0.9 + Math.random() * 1.4, d: i * 160 });
       const t0 = performance.now();
@@ -1031,7 +803,7 @@
         }
         if (alive) requestAnimationFrame(st); else res(); })(); });
     }
-    if (pick === 'spin') {                     // 하트가 빙글 돌며 커졌다가 반짝 터짐
+    if (pick === 'spin') {
       const h = makeHeart(960, 300, 0); cleanup.push(h);
       await tween(900, t => h.setAttribute('transform', `translate(960 300) rotate(${720 * t}) scale(${6 * t})`), ease.out);
       SFX.sparkle();
@@ -1040,93 +812,261 @@
     }
     cleanup.forEach(el => el.remove());
   }
-  R.love = async () => {                       // 부끄러워하기 + 하트
-    SFX.love();
-    face.eyeSy = 0.18; setMouth('wobble');
-    // 볼이 서서히 발그레
-    const blushTo = 2.2;
-    const blushAnim = tween(700, t => {
-      const k = 1 + (blushTo - 1) * t;
-      cheekL.setAttribute('transform', `translate(134 243) scale(${k}) translate(-134 -243)`);
-      cheekR.setAttribute('transform', `translate(266 243) scale(${k}) translate(-266 -243)`);
-      cheekL.setAttribute('opacity', 1 + 0.6 * t); cheekR.setAttribute('opacity', 1 + 0.6 * t);
-    }, ease.out);
-    const pick = rnd(['cover', 'twist', 'peekaboo', 'melt']);
-    let shyMotion;
-    if (pick === 'cover') {                    // 양손으로 얼굴 가리고 몸 비틀기
-      shyMotion = (async () => {
-        await Promise.all([tween(400, t => setHand(handL, HL, 150 * t, -60 * t, 30 * t), ease.out), tween(400, t => setHand(handR, HR, -150 * t, -60 * t, -30 * t), ease.out)]);
-        for (let i = 0; i < 5; i++) { await tween(220, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 5 * t)); await tween(220, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 5 * (1 - t))); }
-        await Promise.all([tween(400, t => setHand(handL, HL, 150 * (1 - t), -60 * (1 - t), 30 * (1 - t))), tween(400, t => setHand(handR, HR, -150 * (1 - t), -60 * (1 - t), -30 * (1 - t)))]);
-      })();
-    } else if (pick === 'twist') {             // 고개 돌리고 손 모아 꼼지락
-      shyMotion = (async () => {
-        await Promise.all([tween(450, t => setRig(0, 20 * t, 1, 12 * t), ease.out), tween(450, t => setHand(handL, HL, 160 * t, 120 * t, 20 * t), ease.out), tween(450, t => setHand(handR, HR, -160 * t, 120 * t, -20 * t), ease.out)]);
-        for (let i = 0; i < 4; i++) { await tween(180, t => { setHand(handL, HL, 160 + 20 * t, 120, 20); setHand(handR, HR, -160 - 20 * t, 120, -20); }); await tween(180, t => { setHand(handL, HL, 180 - 20 * t, 120, 20); setHand(handR, HR, -180 + 20 * t, 120, -20); }); }
-        await wait(400);
-        await Promise.all([tween(450, t => setRig(0, 20 * (1 - t), 1, 12 * (1 - t))), tween(450, t => setHand(handL, HL, 160 * (1 - t), 120 * (1 - t), 20 * (1 - t))), tween(450, t => setHand(handR, HR, -160 * (1 - t), 120 * (1 - t), -20 * (1 - t)))]);
-      })();
-    } else if (pick === 'peekaboo') {          // 손으로 눈 가렸다가 살짝 빼꼼
-      shyMotion = (async () => {
-        await Promise.all([tween(350, t => setHand(handL, HL, 200 * t, -110 * t, 20 * t), ease.out), tween(350, t => setHand(handR, HR, -200 * t, -110 * t, -20 * t), ease.out)]);
-        await wait(700);
-        await tween(350, t => setHand(handR, HR, -200 + 120 * t, -110 - 40 * t, -20 - 20 * t), ease.out);   // 한 손 살짝 치움
-        face.eyeSy = 1.2; face.eyeSx = 1.2; await wait(600); face.eyeSy = 0.18;
-        await tween(300, t => setHand(handR, HR, -80 - 120 * t, -150 + 40 * t, -40 + 20 * t));
-        await wait(500);
-        await Promise.all([tween(400, t => setHand(handL, HL, 200 * (1 - t), -110 * (1 - t), 20 * (1 - t))), tween(400, t => setHand(handR, HR, -200 * (1 - t), -110 * (1 - t), -20 * (1 - t)))]);
-      })();
-    } else {                                   // 녹아내리듯 스르르 작아졌다 돌아옴
-      shyMotion = (async () => {
-        await tween(900, t => setRig(0, 120 * t, 1 - 0.25 * t, 0), ease.inOut);
-        for (let i = 0; i < 3; i++) { await tween(200, t => setRig(0, 120, 0.75, (i % 2 ? -1 : 1) * 4 * t)); await tween(200, t => setRig(0, 120, 0.75, (i % 2 ? -1 : 1) * 4 * (1 - t))); }
-        await tween(600, t => setRig(0, 120 * (1 - t), 0.75 + 0.25 * t, 0), ease.back);
-      })();
-    }
-    await Promise.all([shyMotion, heartShow(), blushAnim]);
-    await tween(500, t => {
-      const k = blushTo - (blushTo - 1) * t;
-      cheekL.setAttribute('transform', `translate(134 243) scale(${k}) translate(-134 -243)`);
-      cheekR.setAttribute('transform', `translate(266 243) scale(${k}) translate(-266 -243)`);
-      cheekL.setAttribute('opacity', 1.6 - 0.6 * t); cheekR.setAttribute('opacity', 1.6 - 0.6 * t);
-    });
-    cheekL.removeAttribute('transform'); cheekR.removeAttribute('transform');
-    cheekL.removeAttribute('opacity'); cheekR.removeAttribute('opacity');
-    resetFace();
-  };
-  const cheekL = document.getElementById('cheekL'), cheekR = document.getElementById('cheekR');
 
-  R.scream = async () => {
-    const pick = rnd(['side', 'up', 'far', 'down', 'fade', 'together', 'faint']);
-    face.eyeSx = 1.5; face.eyeSy = 1.4; setBrows('up'); setMouth('open');
-    if (pick === 'together') {
-      SFX.scream();
-      await Promise.all([tween(300, t => setHand(handL, HL, 200 * t, -160 * t, -30 * t), ease.out), tween(300, t => setHand(handR, HR, -200 * t, -160 * t, 30 * t), ease.out)]);
-      for (let i = 0; i < 6; i++) { await tween(90, t => setRig((i % 2 ? 1 : -1) * 18 * t, 0, 1.05, 0)); }
-      await tween(200, t => setRig(0, 0, 1.05 - 0.05 * t, 0));
-      await Promise.all([tween(400, t => setHand(handL, HL, 200 * (1 - t), -160 * (1 - t), -30 * (1 - t))), tween(400, t => setHand(handR, HR, -200 * (1 - t), -160 * (1 - t), 30 * (1 - t)))]);
-      resetFace(); return;
+  // ===== 반응 세트: 각 5종 랜덤 =====
+  const R = {};
+
+  // 1) 지나감: 큰 동작으로 시선·몸이 따라감
+  R.pass = async (side) => {
+    const s = side === 'R' ? 1 : -1;
+    const pick = rnd(['slide', 'lean', 'beckon', 'peek', 'wink']);
+    if (pick === 'slide') {                     // 몸 전체가 그쪽으로 크게 미끄러져 따라감
+      SFX.whoosh(); face.eyeSx = 1.2; face.eyeSy = 1.2; setMouth('o');
+      await tween(500, t => setRig(300 * s * t, -30 * Math.sin(t * Math.PI), 1, 12 * s * t), ease.out);
+      await wait(900);
+      await tween(600, t => setRig(300 * s * (1 - t), 0, 1, 12 * s * (1 - t)));
     }
-    if (pick === 'faint') {                            // 기절해서 스르르 내려앉았다가 일어남
-      SFX.shock(); await wait(200);
-      face.eyeSy = 0.1; setMouth('wobble'); setBrows('sad');
-      await tween(900, t => setRig(0, 260 * t, 1, 70 * t, 1), ease.in);
-      await wait(1800); SFX.boing();
-      await tween(600, t => setRig(0, 260 * (1 - t), 1, 70 * (1 - t), 1), ease.back);
-      resetFace(); return;
+    if (pick === 'lean') {                      // 몸을 크게 기울이고 손을 눈 위에 올려 멀리 보기
+      SFX.who2(); face.eyeSx = 1.3; face.eyeSy = 1.3; setMouth('o');
+      const el = side === 'R' ? handR : handL, base = side === 'R' ? HR : HL;
+      await Promise.all([tween(450, t => setRig(80 * s * t, 0, 1, 18 * s * t), ease.out), tween(450, t => setHand(el, base, -120 * s * t, -330 * t, 30 * s * t), ease.out)]);
+      await wait(1000);
+      await Promise.all([tween(450, t => setRig(80 * s * (1 - t), 0, 1, 18 * s * (1 - t))), tween(450, t => setHand(el, base, -120 * s * (1 - t), -330 * (1 - t), 30 * s * (1 - t)))]);
     }
-    SFX.poof();
-    if (pick === 'side') { const s = Math.random() < 0.5 ? -1 : 1; await tween(450, t => setRig(s * 1500 * t, -80 * Math.sin(t * Math.PI), 1, s * 20 * t), ease.in); }
-    if (pick === 'up')   { await tween(500, t => setRig(0, -1300 * t, 1, 0), ease.in); }
-    if (pick === 'far')  { await tween(700, t => setRig(0, -200 * t, 1 - 0.97 * t, 0, 1 - t), ease.in); }
-    if (pick === 'down') { await tween(450, t => setRig(0, 900 * t, 1, 0), ease.in); }
-    if (pick === 'fade') { await tween(700, t => setRig(0, 0, 1 + 0.15 * t, 0, 1 - t)); }
+    if (pick === 'beckon') { rnd([SFX.eerie, SFX.eerie2, SFX.eerie3])(); setMouth('big'); await beckon(side); }
+    if (pick === 'peek') {
+      SFX.eerie2(); face.eyeSx = 1.25; face.eyeSy = 1.2; setMouth('o');
+      await tween(500, t => setRig(200 * s * t, -40 * t, 1, 10 * s * t), ease.out);
+      await wait(1000);
+      await tween(500, t => setRig(200 * s * (1 - t), -40 * (1 - t), 1, 10 * s * (1 - t)));
+    }
+    if (pick === 'wink') {
+      SFX.giggle(); setMouth('big');
+      const el = side === 'R' ? handR : handL, base = side === 'R' ? HR : HL;
+      await Promise.all([tween(300, t => setHand(el, base, 0, -180 * t, -20 * s * t), ease.out), tween(200, t => { face.eyeSy = 1 - 0.85 * t; })]);
+      await wait(700);
+      await Promise.all([tween(300, t => setHand(el, base, 0, -180 * (1 - t), -20 * s * (1 - t))), tween(200, t => { face.eyeSy = 0.15 + 0.85 * t; })]);
+    }
     resetFace();
-    await wait(2200 + Math.random() * 1500);
-    SFX.pop();
-    await tween(700, t => setRig(0, 0, 0.3 + 0.7 * t, 0, t), ease.back);
-    setRig(0, 0, 1, 0, 1);
   };
+
+  // 2) 앞에 멈춰 섬
+  R.stand = async () => {
+    const pick = rnd(['tilt', 'lean', 'suspicious', 'bounce', 'hidepeek']);
+    if (pick === 'tilt') { SFX.who(); face.eyeSx = 1.35; face.eyeSy = 1.3; setMouth('o'); await tilt(); }
+    if (pick === 'lean') {
+      SFX.who2(); face.eyeSx = 1.4; face.eyeSy = 1.35; setMouth('o');
+      await tween(500, t => setRig(0, 60 * t, 1 + 0.18 * t, 0), ease.out);
+      await wait(1000);
+      await tween(500, t => setRig(0, 60 * (1 - t), 1.18 - 0.18 * t, 0));
+    }
+    if (pick === 'suspicious') {
+      SFX.hmm(); face.eyeSy = 0.45; setBrows('one'); setMouth('flat');
+      await tween(400, t => setRig(0, 0, 1, 6 * t));
+      await tween(400, t => setHand(handR, HR, -120 * t, 100 * t, 30 * t), ease.out);
+      await wait(1100);
+      await Promise.all([tween(400, t => setRig(0, 0, 1, 6 * (1 - t))), tween(400, t => setHand(handR, HR, -120 * (1 - t), 100 * (1 - t), 30 * (1 - t)))]);
+    }
+    if (pick === 'bounce') { SFX.hello2(); setMouth('big'); await jump(3, 70); }
+    if (pick === 'hidepeek') {                  // 양손으로 얼굴 가렸다가 빼꼼
+      SFX.shy(); setMouth('o');
+      await bothHands(200, -110, 20, -200, -110, -20, 350);
+      await wait(700);
+      await tween(350, t => setHand(handR, HR, -200 + 130 * t, -110 - 50 * t, -20 - 20 * t), ease.out);
+      face.eyeSx = 1.3; face.eyeSy = 1.3; SFX.pop(); await wait(600);
+      await bothHandsBack(200, -110, 20, -70, -160, -40, 400);
+    }
+    resetFace();
+  };
+
+  // 3) 팔 좌우 흔들기 → 인사
+  R.wave = async (how) => {
+    const pick = how === 'both' ? 'both' : rnd(['right', 'circle', 'shy', 'both', 'jumpwave']);
+    if (pick === 'right') { rnd([SFX.hello, SFX.hello2])(); setMouth('big'); await waveHand('R', 3); }
+    if (pick === 'both') { SFX.tada(); setMouth('big'); await Promise.all([waveHand('R', 3), waveHand('L', 3)]); }
+    if (pick === 'circle') {
+      SFX.whoosh(); setMouth('big');
+      await tween(1100, t => { const a = t * Math.PI * 2; setHand(handR, HR, -150 + 150 * Math.cos(a), -200 - 150 * Math.sin(a), 360 * t); }, t => t);
+      await tween(300, t => setHand(handR, HR, 0, 0, 0));
+    }
+    if (pick === 'shy') {
+      SFX.shy(); face.eyeSy = 0.2; setMouth('smile');
+      await tween(400, t => setHand(handL, HL, 40 * t, -120 * t, 0), ease.out);
+      for (let i = 0; i < 3; i++) { await tween(140, t => setHand(handL, HL, 40, -120, 12 * t)); await tween(140, t => setHand(handL, HL, 40, -120, 12 - 12 * t)); }
+      await tween(400, t => setHand(handL, HL, 40 * (1 - t), -120 * (1 - t), 0));
+    }
+    if (pick === 'jumpwave') {                  // 점프하며 양손 흔들기
+      SFX.hello(); setMouth('big');
+      await Promise.all([jump(2, 100), waveHand('R', 2), waveHand('L', 2)]);
+    }
+    resetFace();
+  };
+
+  // 4) 만세 → 같이 신남
+  R.cheer = async () => {
+    const pick = rnd(['banzai', 'spin', 'fly', 'bouncewave', 'heartsbanzai']);
+    setMouth('big');
+    if (pick === 'banzai') {                    // 양손 번쩍 + 점프
+      SFX.tada(); face.eyeSx = 1.2; face.eyeSy = 1.2;
+      await bothHands(80, -420, -30, -80, -420, 30, 300);
+      await jump(3, 140);
+      await bothHandsBack(80, -420, -30, -80, -420, 30, 400);
+    }
+    if (pick === 'spin') { await spinOnce(900); SFX.pop(); face.eyeSx = 1.3; face.eyeSy = 1.3; await wait(300); }
+    if (pick === 'fly') { await flyAwayAndBack(Math.random() < 0.5 ? -1 : 1); }
+    if (pick === 'bouncewave') { SFX.hello2(); await Promise.all([jump(3, 90), waveHand('R', 3), waveHand('L', 3)]); }
+    if (pick === 'heartsbanzai') {              // 만세하며 하트 뿅뿅
+      SFX.love(); await bothHands(80, -420, -30, -80, -420, 30, 300);
+      await Promise.all([heartShow('pyong'), (async () => { for (let i = 0; i < 4; i++) { await tween(250, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 8 * t)); await tween(250, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 8 * (1 - t))); } })()]);
+      await bothHandsBack(80, -420, -30, -80, -420, 30, 400);
+    }
+    resetFace();
+  };
+
+  // 5) 머리 위 하트 → 부끄러움 + 하트
+  R.love = async () => {
+    SFX.love(); face.eyeSy = 0.18; setMouth('wobble'); blush(true);
+    const pick = rnd(['cover', 'twist', 'peekaboo', 'melt', 'floatup']);
+    let shy;
+    if (pick === 'cover') shy = (async () => {
+      await bothHands(150, -60, 30, -150, -60, -30, 400);
+      for (let i = 0; i < 5; i++) { await tween(220, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 5 * t)); await tween(220, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 5 * (1 - t))); }
+      await bothHandsBack(150, -60, 30, -150, -60, -30, 400);
+    })();
+    else if (pick === 'twist') shy = (async () => {
+      await Promise.all([tween(450, t => setRig(0, 20 * t, 1, 12 * t), ease.out), bothHands(160, 120, 20, -160, 120, -20, 450)]);
+      for (let i = 0; i < 4; i++) { await tween(180, t => { setHand(handL, HL, 160 + 20 * t, 120, 20); setHand(handR, HR, -160 - 20 * t, 120, -20); }); await tween(180, t => { setHand(handL, HL, 180 - 20 * t, 120, 20); setHand(handR, HR, -180 + 20 * t, 120, -20); }); }
+      await wait(400);
+      await Promise.all([tween(450, t => setRig(0, 20 * (1 - t), 1, 12 * (1 - t))), bothHandsBack(160, 120, 20, -160, 120, -20, 450)]);
+    })();
+    else if (pick === 'peekaboo') shy = (async () => {
+      await bothHands(200, -110, 20, -200, -110, -20, 350);
+      await wait(700);
+      await tween(350, t => setHand(handR, HR, -200 + 120 * t, -110 - 40 * t, -20 - 20 * t), ease.out);
+      face.eyeSy = 1.2; face.eyeSx = 1.2; await wait(600); face.eyeSy = 0.18;
+      await tween(300, t => setHand(handR, HR, -80 - 120 * t, -150 + 40 * t, -40 + 20 * t));
+      await wait(500);
+      await bothHandsBack(200, -110, 20, -200, -110, -20, 400);
+    })();
+    else if (pick === 'melt') shy = (async () => {
+      await tween(900, t => setRig(0, 120 * t, 1 - 0.25 * t, 0), ease.inOut);
+      for (let i = 0; i < 3; i++) { await tween(200, t => setRig(0, 120, 0.75, (i % 2 ? -1 : 1) * 4 * t)); await tween(200, t => setRig(0, 120, 0.75, (i % 2 ? -1 : 1) * 4 * (1 - t))); }
+      await tween(600, t => setRig(0, 120 * (1 - t), 0.75 + 0.25 * t, 0), ease.back);
+    })();
+    else shy = (async () => {                   // 둥실 떠올라 좌우로 살랑이며 내려옴
+      await tween(700, t => setRig(0, -220 * t, 1 + 0.05 * t, 0), ease.out);
+      for (let i = 0; i < 3; i++) { await tween(300, t => setRig(60 * Math.sin(t * Math.PI) * (i % 2 ? -1 : 1), -220, 1.05, (i % 2 ? -1 : 1) * 6 * Math.sin(t * Math.PI))); }
+      await tween(700, t => setRig(0, -220 * (1 - t), 1.05 - 0.05 * t, 0), ease.inOut);
+    })();
+    await Promise.all([shy, heartShow()]);
+    blush(false); resetFace();
+  };
+
+  // 6) 손 앞으로 뻗기 / 손하트
+  R.reach = async () => {
+    const pick = rnd(['hearts', 'shy', 'jump', 'fly', 'highfive']);
+    if (pick === 'hearts') { SFX.love(); setMouth('big'); face.eyeSy = 0.2; blush(true); await Promise.all([heartShow('pyong'), jump(2, 60)]); blush(false); }
+    if (pick === 'shy') { SFX.shy(); face.eyeSy = 0.18; setMouth('wobble'); blush(true); await bothHands(150, -60, 30, -150, -60, -30, 400); for (let i = 0; i < 4; i++) { await tween(220, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 6 * t)); await tween(220, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 6 * (1 - t))); } await bothHandsBack(150, -60, 30, -150, -60, -30, 400); blush(false); }
+    if (pick === 'jump') { SFX.tada(); setMouth('big'); face.eyeSx = 1.2; face.eyeSy = 1.2; await jump(4, 150); }
+    if (pick === 'fly') { await flyAwayAndBack(Math.random() < 0.5 ? -1 : 1); }
+    if (pick === 'highfive') {                  // 손을 앞으로 쑥 내밀어 하이파이브
+      setMouth('big'); SFX.pop();
+      await tween(350, t => setHand(handR, HR, -200 * t, 60 * t, -30 * t, 1 + 0.6 * t), ease.out);
+      SFX.clap(); face.eyeSy = 0.2;
+      await tween(120, t => setHand(handR, HR, -200 - 40 * t, 60, -30, 1.6));
+      await wait(500);
+      await tween(400, t => setHand(handR, HR, -240 * (1 - t), 60 * (1 - t), -30 * (1 - t), 1.6 - 0.6 * t));
+    }
+    resetFace();
+  };
+
+  // 7) 박수 (가슴 앞 또는 머리 위) → 같이 박수·신남·노래
+  async function clapHands(times = 3, dy = -80) {
+    for (let i = 0; i < times; i++) {
+      SFX.clap();
+      await Promise.all([tween(150, t => setHand(handL, HL, 250 * t, dy, 20), ease.in), tween(150, t => setHand(handR, HR, -250 * t, dy, -20), ease.in)]);
+      await Promise.all([tween(190, t => setHand(handL, HL, 250 - 250 * t, dy, 20)), tween(190, t => setHand(handR, HR, -250 + 250 * t, dy, -20))]);
+    }
+  }
+  R.clap = async () => {
+    const pick = rnd(['clapalong', 'excited', 'sing', 'overhead', 'bowclap']);
+    setMouth('big');
+    if (pick === 'clapalong') { await clapHands(4, -80); }
+    if (pick === 'excited') {                   // 양손 번쩍 들고 방방 + 하트 뿅뿅
+      SFX.tada(); face.eyeSx = 1.25; face.eyeSy = 1.25;
+      await bothHands(80, -420, -30, -80, -420, 30, 300);
+      await Promise.all([jump(4, 150), heartShow('pyong')]);
+      await bothHandsBack(80, -420, -30, -80, -420, 30, 400);
+    }
+    if (pick === 'sing') {                      // 눈 감고 노래하며 좌우로 흔들, 손은 박자
+      SFX.sing(); face.eyeSy = 0.15; setMouth('open');
+      const sway = (async () => { for (let i = 0; i < 6; i++) { await tween(300, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 7 * t)); await tween(300, t => setRig(0, 0, 1, (i % 2 ? -1 : 1) * 7 * (1 - t))); } })();
+      const hands = (async () => { for (let i = 0; i < 6; i++) { await Promise.all([tween(300, t => setHand(handL, HL, 0, -120 * Math.sin(t * Math.PI), -15 * Math.sin(t * Math.PI))), tween(300, t => setHand(handR, HR, 0, -120 * Math.sin((1 - t) * Math.PI), 15 * Math.sin((1 - t) * Math.PI)))]); } })();
+      await Promise.all([sway, hands]);
+    }
+    if (pick === 'overhead') {                  // 머리 위로 손 올려 박수
+      SFX.hello2();
+      await Promise.all([tween(350, t => setHand(handL, HL, 120 * t, -460 * t, 30 * t), ease.out), tween(350, t => setHand(handR, HR, -120 * t, -460 * t, -30 * t), ease.out)]);
+      for (let i = 0; i < 4; i++) {
+        SFX.clap();
+        await Promise.all([tween(140, t => setHand(handL, HL, 120 + 130 * t, -460, 30), ease.in), tween(140, t => setHand(handR, HR, -120 - 130 * t, -460, -30), ease.in), tween(140, t => setRig(0, -30 * t, 1, 0))]);
+        await Promise.all([tween(180, t => setHand(handL, HL, 250 - 130 * t, -460, 30)), tween(180, t => setHand(handR, HR, -250 + 130 * t, -460, -30)), tween(180, t => setRig(0, -30 * (1 - t), 1, 0))]);
+      }
+      await bothHandsBack(120, -460, 30, -120, -460, -30, 400);
+    }
+    if (pick === 'bowclap') {                   // 꾸벅 인사하고 박수
+      SFX.nod2();
+      await tween(450, t => setRig(0, 70 * t, 1, 0, 1), ease.out); await wait(400);
+      await tween(450, t => setRig(0, 70 * (1 - t), 1, 0, 1));
+      await clapHands(3, -60);
+    }
+    resetFace();
+  };
+
+  // 8) 춤 / 점프 / 마구 움직임 → 같이 날아다니기·춤·감격
+  R.dance = async () => {
+    const pick = rnd(['flyaround', 'dance', 'awe', 'spinjump', 'wiggle']);
+    setMouth('big');
+    if (pick === 'flyaround') {                 // 화면을 크게 한 바퀴 날아다님
+      SFX.whoosh(); face.eyeSx = 1.2; face.eyeSy = 1.2;
+      await tween(2600, t => { const a = t * Math.PI * 2; setRig(Math.sin(a) * 620, -Math.sin(a * 2) * 260 - 60 * Math.sin(t * Math.PI), 1 - 0.15 * Math.sin(a * 2), Math.cos(a) * 18); }, t => t < .5 ? 2*t*t : -1+(4-2*t)*t);
+      SFX.pop();
+    }
+    if (pick === 'dance') {                     // 좌우로 몸 흔들며 손 번갈아 위아래
+      SFX.beat();
+      for (let i = 0; i < 8; i++) {
+        const d = i % 2 ? -1 : 1;
+        await Promise.all([
+          tween(250, t => setRig(80 * d * Math.sin(t * Math.PI), -40 * Math.sin(t * Math.PI), 1, 10 * d * Math.sin(t * Math.PI))),
+          tween(250, t => setHand(handL, HL, 0, d > 0 ? -260 * Math.sin(t * Math.PI) : 0, -20 * Math.sin(t * Math.PI))),
+          tween(250, t => setHand(handR, HR, 0, d < 0 ? -260 * Math.sin(t * Math.PI) : 0, 20 * Math.sin(t * Math.PI))),
+        ]);
+      }
+    }
+    if (pick === 'awe') {                       // 초롱초롱한 눈으로 감격, 손 모으고 반짝
+      SFX.awe(); face.eyeSx = 1.5; face.eyeSy = 1.5; setMouth('o'); blush(true);
+      await bothHands(190, 60, 20, -190, 60, -20, 400);
+      const sp = []; for (let i = 0; i < 6; i++) { const u = document.createElementNS(NS, 'use'); u.setAttribute('href', '#sparkle'); u.setAttribute('fill', '#ffe58a'); heartsLayer.appendChild(u); sp.push({ el: u, x: 760 + Math.random() * 400, y: 300 + Math.random() * 200, d: i * 0.5 }); }
+      await tween(2000, t => { sp.forEach(p => { const k = Math.max(0, Math.sin((t * 6 + p.d) % Math.PI)); p.el.setAttribute('transform', `translate(${p.x} ${p.y}) scale(${1.5 * k})`); }); }, t => t);
+      sp.forEach(p => p.el.remove());
+      await bothHandsBack(190, 60, 20, -190, 60, -20, 400); blush(false);
+    }
+    if (pick === 'spinjump') { await spinOnce(800); await jump(3, 160); }
+    if (pick === 'wiggle') {                    // 신나서 마구 흔들기
+      SFX.giggle(); face.eyeSy = 0.2;
+      for (let i = 0; i < 10; i++) {
+        const d = i % 2 ? -1 : 1;
+        await Promise.all([
+          tween(120, t => setRig(30 * d * Math.sin(t * Math.PI), -20 * Math.sin(t * Math.PI), 1, 8 * d * Math.sin(t * Math.PI))),
+          tween(120, t => setHand(handL, HL, -60 * Math.sin(t * Math.PI), -120 * d * Math.sin(t * Math.PI), -30 * d * Math.sin(t * Math.PI))),
+          tween(120, t => setHand(handR, HR, 60 * Math.sin(t * Math.PI), 120 * d * Math.sin(t * Math.PI), 30 * d * Math.sin(t * Math.PI))),
+        ]);
+      }
+    }
+    resetFace();
+  };
+
+  // 8) 잠
   R.sleep = async () => {
     SFX.yawn(); setMouth('o');
     await tween(600, t => { face.eyeSy = 1 - 0.85 * t; });
@@ -1142,47 +1082,28 @@
     resetFace();
   };
 
-  // ----- 실행 큐: 한 번에 하나, scream 은 끼어들기 가능 -----
+  // ----- 실행 큐: 한 번에 하나 -----
   let busy = false, sleeping = false;
   const cooldown = {};
+  const COOL = { pass: 3000, stand: 3000, wave: 2500, cheer: 2500, love: 3000, reach: 2500, clap: 2500, dance: 4000, sleep: 0, wake: 0 };
   async function react(name, arg) {
     const now = performance.now();
-    const COOL = { pass: 3000, stand: 3000, wave: 2500, candy: 2500, clap: 2500, scream: 3000, love: 3000, sleep: 0, wake: 0 };
     if (cooldown[name] && now - cooldown[name] < COOL[name]) return;
-    if (busy && name !== 'scream') return;
-    if (sleeping && name !== 'wake' && name !== 'scream') { await react('wake'); }
-    if (busy && name === 'scream') { /* 진행 중 동작을 끊지는 못하지만 바로 이어서 비명 */ }
-    busy = true; cooldown[name] = now;
+    if (busy) return;
+    if (sleeping && name !== 'wake') { await react('wake'); }
+    busy = true; cooldown[name] = now; window.followOn = false;
     $('vRe').textContent = name + (arg ? ' ' + arg : '');
     try { await R[name](arg); } catch (e) { console.error(e); }
     setRig(0, 0, 1, 0, 1);
     setHand(handL, HL, 0, 0, 0); setHand(handR, HR, 0, 0, 0);
-    busy = false;
+    busy = false; window.followOn = true;
   }
   setHand(handL, HL, 0, 0, 0); setHand(handR, HR, 0, 0, 0);
-
-  // ----- 소리 → 반응 연결 (ㄷ 방식) -----
-  onSpeech(type => { if (type === 'candy') react('candy'); if (type === 'love') react('love'); });
-  onSound((type, db) => {
-    if (type === 'clap') return react('clap');
-    if (type === 'scream') return react('scream');
-    if (type === 'shout' || type === 'talk') {
-      const useSr = SR_MODE === 'auto' && speech.ok;
-      if (useSr) listenBurst();
-      // 음성인식을 쓰는 중이면 2.5초 기다렸다가 키워드가 안 잡혔을 때만 끄덕임, 아니면 바로 사탕 반응
-      const t0 = performance.now();
-      setTimeout(() => {
-        if (useSr && speech.lastHitAt > t0 - 500) return;
-        if (!useSr || type === 'shout') react('candy'); else nodOnly();
-      }, useSr ? 2500 : 0);
-    }
-  });
-  async function nodOnly() { if (busy) return; busy = true; $('vRe').textContent = 'nod'; SFX.nod(); setMouth('big'); await nod(2); resetFace(); busy = false; }
 
   // ----- 카메라 → 반응 판정 (0.1초마다) -----
   const ZONE_ON = 0.02, CENTER_ON = 0.02;
   let centerSince = 0, sideSince = 0, sideWhich = null, lastMotionAt = performance.now();
-  let topHist = [], lastWaveAt = 0, topBandAt = 0;
+  let topHist = [], lastWaveAt = 0, topBandAt = 0, topSpreadMax = 0, reachSince = 0, flashHist = [], dashHist = [];
   setInterval(() => {
     if (!motion.ok) return;
     const now = performance.now();
@@ -1198,10 +1119,8 @@
     if (m.center > CENTER_ON) { if (!centerSince) centerSince = now; else if (now - centerSince > 2000) { react('stand'); centerSince = now + 99999; } }
     else if (m.center < CENTER_ON * 0.4) centerSince = 0;
 
-    // 손 흔들기: 상단 움직임 중심점이 좌우로 방향을 바꾼 횟수 (1.2초 안에 3번 이상), 몸 전체가 흔들리면 제외
-    if (m.centerTop > 0.03 && m.bottomBand < 0.03) {
-      topHist.push({ x: m.topCx, t: now });
-    }
+    // 팔 좌우 흔들기: 상단 움직임 중심점이 1.2초 안에 방향을 3번 이상 바꿈 (몸 전체가 흔들리면 제외)
+    if (m.centerTop > 0.03 && m.bottomBand < 0.03) topHist.push({ x: m.topCx, t: now });
     topHist = topHist.filter(h => now - h.t < 1200);
     let rev = 0, dir = 0;
     for (let i = 1; i < topHist.length; i++) {
@@ -1212,16 +1131,33 @@
       dir = nd;
     }
     $('vWave').textContent = rev;
-    if (rev >= 3) {
-      const both = m.topL > 0.03 && m.topR > 0.03;
-      react('wave', both ? 'both' : 'one'); topHist = []; lastWaveAt = now;
-    }
+    if (rev >= 3) { react('wave', (m.topL > 0.03 && m.topR > 0.03) ? 'both' : 'one'); topHist = []; lastWaveAt = now; topBandAt = 0; }
 
-    // 하트 제스처: 팔이 머리 위(최상단 띠)로 올라간 직후 0.7초 이상 가만히 멈춤, 그 직전에 흔들기가 없었을 때
-    if (m.topBand > 0.02) { topBandAt = now; }
+    // 만세 / 머리 위 하트: 팔이 최상단 띠로 올라간 뒤 0.7초 이상 멈춤.
+    // 멈추기 직전 상단 움직임의 좌우 폭이 넓으면 만세, 좁으면(가운데로 모임) 하트
+    if (m.topBand > 0.02) { topBandAt = now; topSpreadMax = Math.max(topSpreadMax, m.topSpread); }
     if (topBandAt && now - topBandAt > 700 && now - topBandAt < 1500 && m.total < MIN_MOTION * 2 && now - lastWaveAt > 2500) {
-      react('love'); topBandAt = 0;
+      react(topSpreadMax > 0.45 ? 'cheer' : 'love'); topBandAt = 0; topSpreadMax = 0;
     }
+    if (now - topBandAt > 1500) topSpreadMax = 0;
+
+    // 손 앞으로 뻗기 / 손하트: 화면 가운데에 큰 움직임 덩어리가 0.3초 이상 (손이 카메라 가까이 옴)
+    if (m.midCenter > 0.25 && m.topBand < 0.05) { if (!reachSince) reachSince = now; else if (now - reachSince > 300) { react('reach'); reachSince = now + 99999; } }
+    else if (m.midCenter < 0.08) reachSince = 0;
+
+    // 박수: 중앙(가슴 앞) 또는 상단(머리 위) 움직임이 1.5초 안에 4번 이상 켜졌다 꺼짐, 좌우 중심점은 거의 고정 (흔들기와 구분)
+    flashHist.push({ on: (m.center > 0.035 || m.topBand > 0.03) ? 1 : 0, x: m.cx, t: now });
+    flashHist = flashHist.filter(h => now - h.t < 1500);
+    let flips = 0; for (let i = 1; i < flashHist.length; i++) if (flashHist[i].on !== flashHist[i - 1].on) flips++;
+    const xs = flashHist.map(h => h.x); const xRange = xs.length ? Math.max(...xs) - Math.min(...xs) : 1;
+    $('vFlash').textContent = flips;
+    if (flips >= 4 && xRange < 0.25 && rev < 3 && m.total < 0.12) { react('clap'); flashHist = []; topHist = []; topBandAt = 0; }
+
+    // 춤·점프·마구 움직임: 전체 움직임이 1.5초 동안 평균 0.1 이상
+    dashHist.push({ v: m.total, t: now }); dashHist = dashHist.filter(h => now - h.t < 1500);
+    const avg = dashHist.reduce((a, h) => a + h.v, 0) / Math.max(1, dashHist.length);
+    $('vDance').textContent = avg.toFixed(2);
+    if (dashHist.length >= 12 && avg > 0.10) { react('dance'); dashHist = []; flashHist = []; topHist = []; topBandAt = 0; }
 
     // 아무도 없음: 20초
     if (!sleeping && !busy && now - lastMotionAt > 20000) react('sleep');
@@ -1230,21 +1166,9 @@
 
   // ----- 테스트용 단축키 -----
   window.addEventListener('keydown', (e) => {
-    const map = { '1': ['pass', 'R'], '2': ['stand'], '3': ['wave', 'one'], '4': ['candy'], '5': ['clap'], '6': ['scream'], '7': ['sleep'], '8': ['love'] };
+    const map = { '1': ['pass', 'R'], '2': ['stand'], '3': ['wave', 'one'], '4': ['cheer'], '5': ['love'], '6': ['reach'], '7': ['clap'], '8': ['dance'], '9': ['sleep'] };
     if (map[e.key]) react(...map[e.key]);
   });
-
-  function tick() {
-    lookNow.x += (lookTarget.x - lookNow.x) * 0.2;
-    lookNow.y += (lookTarget.y - lookNow.y) * 0.2;
-    const dx = lookNow.x * EYE_RANGE_X, dy = lookNow.y * EYE_RANGE_Y;
-    const F = window.face;
-    eyeL.setAttribute('transform', `translate(${(166 + dx).toFixed(2)} ${(212 + dy).toFixed(2)}) scale(${F.eyeSx} ${F.eyeSy})`);
-    eyeR.setAttribute('transform', `translate(${(234 + dx).toFixed(2)} ${(212 + dy).toFixed(2)}) scale(${F.eyeSx} ${F.eyeSy})`);
-    mouth.setAttribute('transform', `translate(${(lookNow.x * MOUTH_RANGE_X).toFixed(2)} ${(lookNow.y * MOUTH_RANGE_Y).toFixed(2)})`);
-    requestAnimationFrame(tick);
-  }
-  tick();
 
   // ===== 6단계: 기기용 시작·조작 =====
   let started = false;
@@ -1253,7 +1177,7 @@
     $('startScreen').classList.add('hidden');
     SFX.unlock();
     try { if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen(); } catch (e) {}
-    startCamera(); startMic(); startSpeech(); requestWakeLock();
+    startCamera(); requestWakeLock(); BGM.start();
   }
   $('startScreen').addEventListener('click', startAll);
   $('startScreen').addEventListener('touchend', (e) => { e.preventDefault(); startAll(); });
@@ -1275,14 +1199,10 @@
   $('tapZone').addEventListener('click', cornerTap);
 
   // 패널 버튼
-  $('btnSensDown').addEventListener('click', () => setSens(-2));
-  $('btnSensUp').addEventListener('click', () => setSens(2));
   $('btnMirror').addEventListener('click', toggleMirror);
+  $('btnBgm').addEventListener('click', () => BGM.toggle());
   $('btnHide').addEventListener('click', () => dbg.classList.add('hidden'));
-  $('btnSr').addEventListener('click', () => setSrMode(SR_MODE === 'auto' ? 'off' : 'auto'));
-  $('btnPreset').addEventListener('click', () => setPreset(PRESET === 'device' ? 'mac' : 'device'));
-  setPreset('device');
-  const reactBtns = [['지나감','pass','R'],['멈춤','stand'],['인사','wave','one'],['사탕','candy'],['박수','clap'],['비명','scream'],['잠','sleep'],['하트','love']];
+  const reactBtns = [['지나감','pass','R'],['멈춤','stand'],['인사','wave','one'],['만세','cheer'],['하트','love'],['손뻗기','reach'],['박수','clap'],['춤','dance'],['잠','sleep']];
   reactBtns.forEach(([label, name, arg]) => { const b = document.createElement('button'); b.textContent = label; b.addEventListener('click', () => react(name, arg)); $('btnReacts').appendChild(b); });
 </script>
 </body>
