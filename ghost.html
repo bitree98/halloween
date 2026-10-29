@@ -52,7 +52,7 @@
 
 <video id="cam" autoplay playsinline muted style="display:none"></video>
 <div id="tapZone"></div>
-<div style="position:fixed;right:6px;bottom:4px;color:#8892c8;font:11px monospace;opacity:.6;z-index:5">v7</div>
+<div style="position:fixed;right:6px;bottom:4px;color:#8892c8;font:11px monospace;opacity:.6;z-index:5">v8</div>
 <div id="startScreen"><h1>화면을 터치해서 시작</h1><p>카메라와 마이크 권한을 허용해 주세요</p></div>
 <div id="debug" class="hidden">
   <canvas id="dbgCanvas" width="96" height="54"></canvas>
@@ -70,7 +70,7 @@
   <div>키워드: <span id="srHit">-</span></div>
   <div>흔들기 왕복: <span id="vWave">0</span></div>
   <div>반응: <span id="vRe">-</span></div>
-  <div class="row"><button id="btnSensDown">소리 민감도 -</button><button id="btnSensUp">+</button><button id="btnMirror">좌우반전</button><button id="btnSr">음성인식: 켬(A)</button><button id="btnHide">패널 숨김</button></div>
+  <div class="row"><button id="btnSensDown">소리 민감도 -</button><button id="btnSensUp">+</button><button id="btnMirror">좌우반전</button><button id="btnPreset">기준: 기기</button><button id="btnSr">음성인식: 켬(A)</button><button id="btnHide">패널 숨김</button></div>
   <div class="row" id="btnReacts"></div>
   <div style="opacity:.7">키보드: d 패널 / m 반전 / [ ] 민감도</div>
 </div>
@@ -499,10 +499,16 @@
   window.onSound = fn => soundListeners.push(fn);
 
   // 판정 기준은 전부 "주변 소음 대비 몇 dB 큰가"로 잡아서 장소가 바뀌어도 자동으로 맞춰짐
-  let SENS = 0;                 // 전체 민감도 보정 (dB). [ ] 키로 조절, 7단계에서 현장값 확정
-  const TALK_DB = 14;           // 이 이상이면 "소리 나는 중"
-  const SHOUT_DB = 34;          // 이 이상 튀면 외침/박수 후보
-  const SCREAM_DB = 44;         // 이 이상이면 아주 큰 소리
+  let SENS = 0;                 // 전체 민감도 보정 (dB). [ ] 키 또는 패널 버튼
+  // 기준 프리셋: 기기 마이크는 자동 음량 조절 때문에 조용함~외침 차이가 작아서 값이 낮음
+  const PRESETS = { device: { talk: 6, shout: 14, scream: 22 }, mac: { talk: 14, shout: 34, scream: 44 } };
+  let PRESET = 'device';
+  let TALK_DB = PRESETS[PRESET].talk, SHOUT_DB = PRESETS[PRESET].shout, SCREAM_DB = PRESETS[PRESET].scream;
+  function setPreset(name) {
+    PRESET = name; TALK_DB = PRESETS[name].talk; SHOUT_DB = PRESETS[name].shout; SCREAM_DB = PRESETS[name].scream; SENS = 0;
+    $('vSens').textContent = SENS;
+    const b = document.getElementById('btnPreset'); if (b) b.textContent = '기준: ' + (name === 'device' ? '기기' : '맥') + ' (' + TALK_DB + '/' + SHOUT_DB + '/' + SCREAM_DB + ')';
+  }
   const CLAP_MAX_MS = 90;       // 박수 한 번의 최대 길이
   const CLAP_GAP_MIN = 120, CLAP_GAP_MAX = 700;
   const QUIET_BEFORE_MS = 250;  // 박수로 치려면 직전 이 시간 동안 조용했어야 함 (말소리 음절과 구분)
@@ -538,7 +544,9 @@
       sound.ok = true;
       $('micStatus').textContent = '동작 중';
 
-      let floor = 0.002;                 // 주변 소음 바닥 (천천히 따라감)
+      let floor = 0.002;                 // 주변 소음 바닥
+      const floorHist = [];              // 최근 4초 rms 표본 (0.1초마다)
+      let floorSampleAt = 0;
       let above = false, burstStart = 0, burstPeakDb = 0;
       let lastBurstEnd = -9999, lastBurstLen = 0, lastBurstWasClap = false;
       let lastQuietAt = 0;               // 마지막으로 조용했던 시각
@@ -551,10 +559,12 @@
         const rms = Math.min(1, Math.sqrt(sum / buf.length));
         const now = performance.now();
 
-        // 소음 바닥: 조용할 땐 천천히 내려가고, 시끄러울 땐 아주 천천히 올라감
-        if (rms < floor * 1.5) floor = floor * 0.98 + rms * 0.02;
-        else floor = floor * 0.999 + rms * 0.001;
-        floor = Math.max(floor, 0.0005);
+        // 소음 바닥: 최근 4초 표본의 하위 30% 값 (바닥이 들쭉날쭉한 마이크에서도 안정)
+        if (now - floorSampleAt > 100) {
+          floorSampleAt = now; floorHist.push(rms); if (floorHist.length > 40) floorHist.shift();
+          const sorted = floorHist.slice().sort((a, b) => a - b);
+          floor = Math.max(0.0005, sorted[Math.floor(sorted.length * 0.3)]);
+        }
 
         const db = Math.max(0, 20 * Math.log10(rms / floor)) - SENS;
         sound.level = rms; sound.db = db;
@@ -649,7 +659,9 @@
         for (let k = 0; k < ev.results[i].length; k++) all += ' ' + ev.results[i][k].transcript;
       }
       speech.lastText = text;
-      $('srText').textContent = text.slice(-20);
+      let finalText = '';
+      for (let i = 0; i < ev.results.length; i++) if (ev.results[i].isFinal) finalText += ev.results[i][0].transcript;
+      if (finalText) $('srText').textContent = finalText.slice(-20);
       checkKeywords(all);
     };
     rec.onerror = (ev) => {
@@ -1266,6 +1278,8 @@
   $('btnMirror').addEventListener('click', toggleMirror);
   $('btnHide').addEventListener('click', () => dbg.classList.add('hidden'));
   $('btnSr').addEventListener('click', () => setSrMode(SR_MODE === 'auto' ? 'off' : 'auto'));
+  $('btnPreset').addEventListener('click', () => setPreset(PRESET === 'device' ? 'mac' : 'device'));
+  setPreset('device');
   const reactBtns = [['지나감','pass','R'],['멈춤','stand'],['인사','wave','one'],['사탕','candy'],['박수','clap'],['비명','scream'],['잠','sleep'],['하트','love']];
   reactBtns.forEach(([label, name, arg]) => { const b = document.createElement('button'); b.textContent = label; b.addEventListener('click', () => react(name, arg)); $('btnReacts').appendChild(b); });
 </script>
