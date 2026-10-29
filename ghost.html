@@ -52,7 +52,7 @@
 
 <video id="cam" autoplay playsinline muted style="display:none"></video>
 <div id="tapZone"></div>
-<div style="position:fixed;right:6px;bottom:4px;color:#8892c8;font:11px monospace;opacity:.6;z-index:5">v14</div>
+<div style="position:fixed;right:6px;bottom:4px;color:#8892c8;font:11px monospace;opacity:.6;z-index:5">v15</div>
 <div id="startScreen"><h1>화면을 터치해서 시작</h1><p>카메라 권한을 허용해 주세요</p></div>
 <div id="debug" class="hidden">
   <canvas id="dbgCanvas" width="96" height="54"></canvas>
@@ -391,7 +391,7 @@
     lookNow.x += (lookTarget.x - lookNow.x) * k;
     lookNow.y += (lookTarget.y - lookNow.y) * k;
     const dx = lookNow.x * EYE_RANGE_X, dy = lookNow.y * EYE_RANGE_Y;
-    const F = window.face;
+    const F = window.face || { eyeSx: 1, eyeSy: 1 };
     eyeL.setAttribute('transform', `translate(${(166 + dx).toFixed(2)} ${(212 + dy).toFixed(2)}) scale(${F.eyeSx} ${F.eyeSy})`);
     eyeR.setAttribute('transform', `translate(${(234 + dx).toFixed(2)} ${(212 + dy).toFixed(2)}) scale(${F.eyeSx} ${F.eyeSy})`);
     mouth.setAttribute('transform', `translate(${(lookNow.x * MOUTH_RANGE_X).toFixed(2)} ${(lookNow.y * MOUTH_RANGE_Y).toFixed(2)})`);
